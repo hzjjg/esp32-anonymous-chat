@@ -442,7 +442,7 @@ static esp_err_t sse_handler(httpd_req_t *req) {
     }
 
     if (!client_added) {
-        httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE, "Maximum clients reached");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Maximum clients reached");
         return ESP_FAIL;
     }
 
