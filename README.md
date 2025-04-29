@@ -5,6 +5,10 @@
 
 （有关示例的更多信息，请参阅上一级'examples'目录中的README.md文件。）
 
+## ESP32 开发教程
+
+https://blog.duruofu.top/docs/03.Embedded/ESP32/2025-ESP32-Guide/README.html
+
 ## 概述
 
 本示例主要介绍如何在ESP32上实现RESTful API服务器和HTTP服务器，并提供前端浏览器界面。
