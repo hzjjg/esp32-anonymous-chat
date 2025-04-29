@@ -14,9 +14,11 @@
 #include "esp_log.h"
 #include "esp_vfs.h"
 #include "cJSON.h"
-#include "chat_server.h"
+#include "chat_server.h" // 包含聊天服务器相关的函数声明
 
-static const char *REST_TAG = "esp-rest";
+static const char *REST_TAG = "esp-rest"; // 定义日志标签
+
+// 检查宏，用于检查条件a，如果为假，则打印错误日志并跳转到goto_tag
 #define REST_CHECK(a, str, goto_tag, ...)                                              \
     do                                                                                 \
     {                                                                                  \
@@ -27,20 +29,28 @@ static const char *REST_TAG = "esp-rest";
         }                                                                              \
     } while (0)
 
-#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128)
-#define SCRATCH_BUFSIZE (10240)
+#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128) // 定义文件路径最大长度
+#define SCRATCH_BUFSIZE (10240) // 定义临时缓冲区大小
 
+// REST服务器上下文结构体
 typedef struct rest_server_context {
-    char base_path[ESP_VFS_PATH_MAX + 1];
-    char scratch[SCRATCH_BUFSIZE];
+    char base_path[ESP_VFS_PATH_MAX + 1]; // Web服务器根目录路径
+    char scratch[SCRATCH_BUFSIZE];       // 临时缓冲区，用于读写文件和请求体
 } rest_server_context_t;
 
+// 检查文件扩展名的宏，忽略大小写
 #define CHECK_FILE_EXTENSION(filename, ext) (strcasecmp(&filename[strlen(filename) - strlen(ext)], ext) == 0)
 
-/* Set HTTP response content type according to file extension */
+/**
+ * @brief 根据文件扩展名设置HTTP响应的Content-Type
+ *
+ * @param req HTTP请求对象指针
+ * @param filepath 文件路径
+ * @return esp_err_t ESP_OK表示成功
+ */
 static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepath)
 {
-    const char *type = "text/plain";
+    const char *type = "text/plain"; // 默认为纯文本
     if (CHECK_FILE_EXTENSION(filepath, ".html")) {
         type = "text/html";
     } else if (CHECK_FILE_EXTENSION(filepath, ".js")) {
@@ -52,116 +62,163 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepa
     } else if (CHECK_FILE_EXTENSION(filepath, ".ico")) {
         type = "image/x-icon";
     } else if (CHECK_FILE_EXTENSION(filepath, ".svg")) {
-        type = "text/xml";
+        type = "text/xml"; // 注意：SVG的正确MIME类型通常是 image/svg+xml，这里可能需要修正
     }
     return httpd_resp_set_type(req, type);
 }
 
-/* Send HTTP response with the contents of the requested file */
+/**
+ * @brief 通用GET请求处理函数，用于发送文件内容
+ *
+ * 处理对Web服务器根目录下文件的GET请求，读取文件内容并作为HTTP响应发送。
+ * 如果请求URI是'/'，则默认发送index.html。
+ * @param req HTTP请求对象指针
+ * @return esp_err_t ESP_OK表示成功，ESP_FAIL表示失败
+ */
 static esp_err_t rest_common_get_handler(httpd_req_t *req)
 {
     char filepath[FILE_PATH_MAX];
 
+    // 获取REST服务器上下文
     rest_server_context_t *rest_context = (rest_server_context_t *)req->user_ctx;
+    // 构建完整的文件路径
     strlcpy(filepath, rest_context->base_path, sizeof(filepath));
-    if (req->uri[strlen(req->uri) - 1] == '/') {
-        strlcat(filepath, "/index.html", sizeof(filepath));
+    if (req->uri[strlen(req->uri) - 1] == '/') { // 如果URI以'/'结尾
+        strlcat(filepath, "/index.html", sizeof(filepath)); // 默认请求index.html
     } else {
-        strlcat(filepath, req->uri, sizeof(filepath));
+        strlcat(filepath, req->uri, sizeof(filepath)); // 否则使用URI作为相对路径
     }
+    // 打开文件
     int fd = open(filepath, O_RDONLY, 0);
     if (fd == -1) {
         ESP_LOGE(REST_TAG, "Failed to open file : %s", filepath);
-        /* Respond with 500 Internal Server Error */
+        // 文件打开失败，发送500错误
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read existing file");
         return ESP_FAIL;
     }
 
+    // 根据文件扩展名设置Content-Type
     set_content_type_from_file(req, filepath);
 
+    // 使用临时缓冲区读取和发送文件内容
     char *chunk = rest_context->scratch;
     ssize_t read_bytes;
     do {
-        /* Read file in chunks into the scratch buffer */
+        // 分块读取文件
         read_bytes = read(fd, chunk, SCRATCH_BUFSIZE);
         if (read_bytes == -1) {
             ESP_LOGE(REST_TAG, "Failed to read file : %s", filepath);
         } else if (read_bytes > 0) {
-            /* Send the buffer contents as HTTP response chunk */
+            // 发送文件块作为HTTP响应
             if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
                 close(fd);
                 ESP_LOGE(REST_TAG, "File sending failed!");
-                /* Abort sending file */
+                // 发送失败，中止发送并发送500错误
                 httpd_resp_sendstr_chunk(req, NULL);
-                /* Respond with 500 Internal Server Error */
                 httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
                 return ESP_FAIL;
             }
         }
     } while (read_bytes > 0);
-    /* Close file after sending complete */
+    // 文件发送完成，关闭文件描述符
     close(fd);
     ESP_LOGI(REST_TAG, "File sending complete");
-    /* Respond with an empty chunk to signal HTTP response completion */
+    // 发送空块表示响应结束
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
-/* Simple handler for light brightness control */
+/**
+ * @brief 处理灯光亮度控制的POST请求（示例）
+ *
+ * 接收包含RGB值的JSON数据，并打印日志。
+ * @param req HTTP请求对象指针
+ * @return esp_err_t ESP_OK表示成功，ESP_FAIL表示失败
+ */
 static esp_err_t light_brightness_post_handler(httpd_req_t *req)
 {
-    int total_len = req->content_len;
+    int total_len = req->content_len; // 获取请求体总长度
     int cur_len = 0;
-    char *buf = ((rest_server_context_t *)(req->user_ctx))->scratch;
+    char *buf = ((rest_server_context_t *)(req->user_ctx))->scratch; // 使用临时缓冲区
     int received = 0;
+    // 检查请求体是否过大
     if (total_len >= SCRATCH_BUFSIZE) {
-        /* Respond with 500 Internal Server Error */
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "content too long");
         return ESP_FAIL;
     }
+    // 循环接收请求体数据
     while (cur_len < total_len) {
-        received = httpd_req_recv(req, buf + cur_len, total_len);
+        received = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
         if (received <= 0) {
-            /* Respond with 500 Internal Server Error */
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post control value");
             return ESP_FAIL;
         }
         cur_len += received;
     }
-    buf[total_len] = '\0';
+    buf[total_len] = '\0'; // 添加字符串结束符
 
+    // 解析JSON数据
     cJSON *root = cJSON_Parse(buf);
-    int red = cJSON_GetObjectItem(root, "red")->valueint;
-    int green = cJSON_GetObjectItem(root, "green")->valueint;
-    int blue = cJSON_GetObjectItem(root, "blue")->valueint;
+    if (!root) {
+        ESP_LOGE(REST_TAG, "Failed to parse JSON: %s", buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON format");
+        return ESP_FAIL;
+    }
+    cJSON *red_obj = cJSON_GetObjectItem(root, "red");
+    cJSON *green_obj = cJSON_GetObjectItem(root, "green");
+    cJSON *blue_obj = cJSON_GetObjectItem(root, "blue");
+
+    if (!red_obj || !green_obj || !blue_obj || !cJSON_IsNumber(red_obj) || !cJSON_IsNumber(green_obj) || !cJSON_IsNumber(blue_obj)) {
+        ESP_LOGE(REST_TAG, "Invalid JSON structure: %s", buf);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid RGB values");
+        return ESP_FAIL;
+    }
+
+    int red = red_obj->valueint;
+    int green = green_obj->valueint;
+    int blue = blue_obj->valueint;
     ESP_LOGI(REST_TAG, "Light control: red = %d, green = %d, blue = %d", red, green, blue);
     cJSON_Delete(root);
+    // 发送成功响应
     httpd_resp_sendstr(req, "Post control value successfully");
     return ESP_OK;
 }
 
-/* Simple handler for getting system handler */
+/**
+ * @brief 处理获取系统信息的GET请求
+ *
+ * 返回包含ESP-IDF版本和芯片核心数的JSON响应。
+ * @param req HTTP请求对象指针
+ * @return esp_err_t ESP_OK表示成功
+ */
 static esp_err_t system_info_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_type(req, "application/json"); // 设置响应类型为JSON
     cJSON *root = cJSON_CreateObject();
     esp_chip_info_t chip_info;
-    esp_chip_info(&chip_info);
-    cJSON_AddStringToObject(root, "version", IDF_VER);
-    cJSON_AddNumberToObject(root, "cores", chip_info.cores);
-    const char *sys_info = cJSON_Print(root);
-    httpd_resp_sendstr(req, sys_info);
-    free((void *)sys_info);
-    cJSON_Delete(root);
+    esp_chip_info(&chip_info); // 获取芯片信息
+    cJSON_AddStringToObject(root, "version", IDF_VER); // 添加IDF版本
+    cJSON_AddNumberToObject(root, "cores", chip_info.cores); // 添加核心数
+    const char *sys_info = cJSON_Print(root); // 将JSON对象转换为字符串
+    httpd_resp_sendstr(req, sys_info); // 发送JSON字符串
+    free((void *)sys_info); // 释放JSON字符串内存
+    cJSON_Delete(root); // 删除JSON对象
     return ESP_OK;
 }
 
-/* Simple handler for getting temperature data */
+/**
+ * @brief 处理获取温度数据的GET请求（示例）
+ *
+ * 返回包含随机温度值的JSON响应。
+ * @param req HTTP请求对象指针
+ * @return esp_err_t ESP_OK表示成功
+ */
 static esp_err_t temperature_data_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_type(req, "application/json"); // 设置响应类型为JSON
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "raw", esp_random() % 20);
+    cJSON_AddNumberToObject(root, "raw", esp_random() % 20); // 添加一个随机数作为温度值
     const char *sys_info = cJSON_Print(root);
     httpd_resp_sendstr(req, sys_info);
     free((void *)sys_info);
@@ -169,31 +226,42 @@ static esp_err_t temperature_data_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief 启动RESTful API服务器
+ *
+ * 初始化并启动HTTP服务器，注册各个URI的处理函数。
+ * @param base_path Web服务器的根目录路径
+ * @return esp_err_t ESP_OK表示成功，ESP_FAIL表示失败
+ */
 esp_err_t start_rest_server(const char *base_path)
 {
-    REST_CHECK(base_path, "wrong base path", err);
+    REST_CHECK(base_path, "wrong base path", err); // 检查base_path是否有效
+    // 分配REST服务器上下文内存
     rest_server_context_t *rest_context = calloc(1, sizeof(rest_server_context_t));
     REST_CHECK(rest_context, "No memory for rest context", err);
+    // 复制根目录路径到上下文
     strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
 
     httpd_handle_t server = NULL;
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.uri_match_fn = httpd_uri_match_wildcard;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG(); // 获取默认HTTP服务器配置
+    config.max_open_sockets = 16; // 增加最大并发连接数，以支持更多SSE客户端
+    config.uri_match_fn = httpd_uri_match_wildcard; // 启用通配符URI匹配
 
     // 添加断开连接的处理程序，用于清理聊天客户端列表
-    config.lru_purge_enable = true;
-    config.open_fn = NULL;
-    config.close_fn = chat_disconnect_handler;
+    config.lru_purge_enable = true; // 启用LRU连接清理
+    config.open_fn = NULL; // 连接建立时的回调，这里未使用
+    config.close_fn = chat_disconnect_handler; // 连接关闭时的回调，用于移除SSE客户端
 
     ESP_LOGI(REST_TAG, "Starting HTTP Server");
+    // 启动HTTP服务器
     REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);
 
     /* URI handler for fetching system info */
     httpd_uri_t system_info_get_uri = {
-        .uri = "/api/v1/system/info",
-        .method = HTTP_GET,
-        .handler = system_info_get_handler,
-        .user_ctx = rest_context
+        .uri = "/api/v1/system/info", // URI路径
+        .method = HTTP_GET,           // HTTP方法
+        .handler = system_info_get_handler, // 处理函数
+        .user_ctx = rest_context      // 用户上下文，传递给处理函数
     };
     httpd_register_uri_handler(server, &system_info_get_uri);
 
@@ -215,21 +283,21 @@ esp_err_t start_rest_server(const char *base_path)
     };
     httpd_register_uri_handler(server, &light_brightness_post_uri);
 
-    // 注册聊天服务器的URI处理函数
+    // 注册聊天服务器相关的URI处理函数 (SSE, POST message, GET UUID)
     register_chat_uri_handlers(server);
 
-    /* URI handler for getting web server files */
+    /* URI handler for getting web server files (Catch-all) */
     httpd_uri_t common_get_uri = {
-        .uri = "/*",
+        .uri = "/*", // 通配符，匹配所有其他GET请求
         .method = HTTP_GET,
-        .handler = rest_common_get_handler,
+        .handler = rest_common_get_handler, // 使用通用文件发送处理函数
         .user_ctx = rest_context
     };
     httpd_register_uri_handler(server, &common_get_uri);
 
     return ESP_OK;
-err_start:
+err_start: // 启动服务器失败的错误处理
     free(rest_context);
-err:
+err: // 其他错误的错误处理
     return ESP_FAIL;
 }

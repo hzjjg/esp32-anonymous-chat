@@ -1,3 +1,12 @@
+/*
+ * ESP32匿名聊天服务器实现
+ * 主要功能：
+ * 1. 通过HTTP服务器提供RESTful API接口
+ * 2. 使用SSE(Server-Sent Events)实现实时消息推送
+ * 3. 使用NVS(非易失性存储)持久化聊天记录
+ * 4. 线程安全的消息存储和访问机制
+ */
+
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -12,28 +21,31 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 
-#define MAX_MESSAGES 100
-#define MAX_MESSAGE_LENGTH 150
-#define MAX_UUID_LENGTH 37  // 36 chars + null terminator
-#define SSE_RETRY_TIMEOUT 3000 // milliseconds
-#define MAX_SSE_CLIENTS 10     // 限制最大SSE客户端数量
-#define NVS_MSG_KEY_PREFIX "msg_"  // NVS消息键前缀
-#define NVS_MSG_COUNT_KEY "msg_count" // 存储消息计数的键
+/* 系统配置常量 */
+#define MAX_MESSAGES 100       // 最大存储消息数量
+#define MAX_MESSAGE_LENGTH 150  // 单条消息最大长度
+#define MAX_UUID_LENGTH 37      // UUID最大长度(36字符+空终止符)
+#define SSE_RETRY_TIMEOUT 3000  // SSE客户端重连超时时间(毫秒)
+#define MAX_SSE_CLIENTS 10      // 最大SSE客户端连接数
+#define NVS_MSG_KEY_PREFIX "msg_" // NVS存储消息的键前缀
+#define NVS_MSG_COUNT_KEY "msg_count" // NVS存储消息总数的键
 
-static const char *CHAT_TAG = "chat-server";
-static SemaphoreHandle_t chat_mutex = NULL;
+static const char *CHAT_TAG = "chat-server"; // 日志标签
+static SemaphoreHandle_t chat_mutex = NULL; // 聊天消息存储的互斥锁
 
+/* 聊天消息结构体 */
 typedef struct {
-    char uuid[MAX_UUID_LENGTH];
-    char username[32];
-    char message[MAX_MESSAGE_LENGTH];
-    uint32_t timestamp;
+    char uuid[MAX_UUID_LENGTH];      // 消息唯一标识符
+    char username[32];               // 用户名
+    char message[MAX_MESSAGE_LENGTH]; // 消息内容
+    uint32_t timestamp;             // 时间戳
 } chat_message_t;
 
+/* 聊天消息存储结构体 */
 typedef struct {
-    chat_message_t messages[MAX_MESSAGES];
-    int count;
-    int next_index;
+    chat_message_t messages[MAX_MESSAGES]; // 消息环形缓冲区
+    int count;                             // 当前存储的消息数量
+    int next_index;                        // 下一条消息的存储位置
 } chat_storage_t;
 
 static chat_storage_t chat_storage = {
@@ -41,28 +53,37 @@ static chat_storage_t chat_storage = {
     .next_index = 0
 };
 
-// List of connected SSE clients
+/* SSE客户端结构体 */
 typedef struct sse_client {
-    httpd_handle_t hd;
-    int fd;
-    uint32_t last_activity;   // 添加最后活动时间
-    struct sse_client *next;
+    httpd_handle_t hd;        // HTTP服务器句柄
+    int fd;                   // Socket文件描述符
+    uint32_t last_activity;   // 最后活动时间(用于检测超时)
+    struct sse_client *next;  // 指向下一个客户端的指针
 } sse_client_t;
 
-static sse_client_t *sse_clients = NULL;
-static SemaphoreHandle_t sse_mutex = NULL;
-static int sse_client_count = 0; // 跟踪SSE客户端计数
+static sse_client_t *sse_clients = NULL; // SSE客户端链表头指针
+static SemaphoreHandle_t sse_mutex = NULL; // SSE客户端列表的互斥锁
+static int sse_client_count = 0;          // 当前连接的SSE客户端数量
 
-// Generate UUID v4
+/*
+ * 生成UUID v4
+ * @param uuid_str 输出参数，用于存储生成的UUID字符串
+ * 说明：
+ * 1. 使用ESP32的硬件随机数生成器创建16字节随机数
+ * 2. 设置版本位(第6字节的高4位)为0100(版本4)
+ * 3. 设置变体位(第8字节的高2位)为10(DCE 1.1变体)
+ * 4. 格式化为标准UUID字符串(8-4-4-4-12)
+ */
 static void generate_uuid(char *uuid_str) {
     uint8_t uuid[16];
-    esp_fill_random(uuid, sizeof(uuid));
+    esp_fill_random(uuid, sizeof(uuid)); // 使用硬件随机数生成器
 
-    // Set version to 4 (random UUID)
+    // 设置版本位为4(随机UUID)
     uuid[6] = (uuid[6] & 0x0F) | 0x40;
-    // Set variant to DCE 1.1
+    // 设置变体位为DCE 1.1
     uuid[8] = (uuid[8] & 0x3F) | 0x80;
 
+    // 格式化为UUID字符串
     snprintf(uuid_str, MAX_UUID_LENGTH,
              "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
              uuid[0], uuid[1], uuid[2], uuid[3],
@@ -71,7 +92,17 @@ static void generate_uuid(char *uuid_str) {
              uuid[12], uuid[13], uuid[14], uuid[15]);
 }
 
-// 从NVS中保存单条消息
+/*
+ * 保存单条消息到NVS
+ * @param nvs_handle NVS句柄
+ * @param index 消息索引
+ * @param message 要保存的消息结构体指针
+ * @return ESP_OK成功，其他为错误码
+ * 说明：
+ * 1. 使用"msg_"前缀+索引作为键名
+ * 2. 将消息结构体转换为JSON格式存储
+ * 3. 自动管理内存，确保不会泄漏
+ */
 static esp_err_t save_message_to_nvs(nvs_handle_t nvs_handle, int index, const chat_message_t *message) {
     char key[16];
     snprintf(key, sizeof(key), "%s%d", NVS_MSG_KEY_PREFIX, index);
@@ -96,17 +127,30 @@ static esp_err_t save_message_to_nvs(nvs_handle_t nvs_handle, int index, const c
     return err;
 }
 
-// 从NVS中加载单条消息
+/*
+ * 从NVS加载单条消息
+ * @param nvs_handle NVS句柄
+ * @param index 消息索引
+ * @param message 输出参数，用于存储加载的消息
+ * @return ESP_OK成功，其他为错误码
+ * 说明：
+ * 1. 先获取存储的JSON字符串大小
+ * 2. 分配内存并读取JSON字符串
+ * 3. 解析JSON并填充到消息结构体
+ * 4. 自动管理内存，确保不会泄漏
+ */
 static esp_err_t load_message_from_nvs(nvs_handle_t nvs_handle, int index, chat_message_t *message) {
     char key[16];
     snprintf(key, sizeof(key), "%s%d", NVS_MSG_KEY_PREFIX, index);
 
+    // 先获取所需存储空间大小
     size_t required_size = 0;
     esp_err_t err = nvs_get_str(nvs_handle, key, NULL, &required_size);
     if (err != ESP_OK) {
         return err;
     }
 
+    // 分配内存并读取JSON字符串
     char *msg_json = malloc(required_size);
     if (!msg_json) {
         return ESP_ERR_NO_MEM;
@@ -118,6 +162,7 @@ static esp_err_t load_message_from_nvs(nvs_handle_t nvs_handle, int index, chat_
         return err;
     }
 
+    // 解析JSON
     cJSON *msg_obj = cJSON_Parse(msg_json);
     free(msg_json);
 
@@ -125,6 +170,7 @@ static esp_err_t load_message_from_nvs(nvs_handle_t nvs_handle, int index, chat_
         return ESP_FAIL;
     }
 
+    // 提取各字段
     cJSON *uuid_obj = cJSON_GetObjectItem(msg_obj, "uuid");
     cJSON *username_obj = cJSON_GetObjectItem(msg_obj, "username");
     cJSON *message_obj = cJSON_GetObjectItem(msg_obj, "message");
@@ -144,7 +190,14 @@ static esp_err_t load_message_from_nvs(nvs_handle_t nvs_handle, int index, chat_
     return ESP_OK;
 }
 
-// Initialize chat server
+/**
+ * @brief 初始化聊天服务器
+ * 
+ * 创建必要的互斥锁并从NVS加载历史聊天消息
+ * 
+ * @return ESP_OK 成功初始化
+ * @return ESP_FAIL 初始化失败
+ */
 esp_err_t chat_server_init(void) {
     chat_mutex = xSemaphoreCreateMutex();
     if (chat_mutex == NULL) {
@@ -196,7 +249,14 @@ esp_err_t chat_server_init(void) {
     return ESP_OK;
 }
 
-// Save chat history to NVS
+/**
+ * @brief 保存聊天历史到NVS
+ * 
+ * 将当前内存中的聊天消息保存到非易失性存储(NVS)
+ * 
+ * @return ESP_OK 保存成功
+ * @return 其他错误码 保存失败
+ */
 static esp_err_t save_chat_history(void) {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open("chat", NVS_READWRITE, &nvs_handle);
@@ -249,7 +309,15 @@ static esp_err_t save_chat_history(void) {
     return err;
 }
 
-// Add a new chat message
+/**
+ * @brief 添加新的聊天消息
+ * 
+ * @param uuid 用户唯一标识符
+ * @param username 用户名
+ * @param message 消息内容
+ * @return ESP_OK 添加成功
+ * @return ESP_FAIL 添加失败
+ */
 esp_err_t add_chat_message(const char *uuid, const char *username, const char *message) {
     if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
         int idx = chat_storage.next_index;
@@ -275,7 +343,14 @@ esp_err_t add_chat_message(const char *uuid, const char *username, const char *m
     return ESP_FAIL;
 }
 
-// Get chat messages as JSON array
+/**
+ * @brief 获取聊天消息的JSON数组
+ * 
+ * 将当前存储的聊天消息转换为JSON格式字符串
+ * 
+ * @return char* JSON字符串指针，调用者负责释放内存
+ * @return NULL 获取失败
+ */
 char* get_chat_messages_json(void) {
     cJSON *root = cJSON_CreateArray();
     if (root == NULL) {
@@ -315,7 +390,12 @@ char* get_chat_messages_json(void) {
     return json_str;
 }
 
-// 清理过期或无效的SSE客户端
+/**
+ * @brief 清理过期或无效的SSE客户端
+ * 
+ * 检查所有SSE客户端连接，移除超过5分钟无活动的客户端
+ * 并发送关闭消息通知客户端
+ */
 static void cleanup_sse_clients(void) {
     uint32_t current_time = (uint32_t)time(NULL);
 
@@ -346,7 +426,14 @@ static void cleanup_sse_clients(void) {
     }
 }
 
-// Add a new SSE client
+/**
+ * @brief 添加新的SSE客户端
+ * 
+ * @param hd HTTP服务器句柄
+ * @param fd 客户端socket文件描述符
+ * 
+ * 注意：如果达到最大客户端限制，新连接将被拒绝
+ */
 static void add_sse_client(httpd_handle_t hd, int fd) {
     // 首先清理过期客户端
     cleanup_sse_clients();
@@ -375,7 +462,14 @@ static void add_sse_client(httpd_handle_t hd, int fd) {
     }
 }
 
-// Remove an SSE client
+/**
+ * @brief 移除SSE客户端
+ * 
+ * @param hd HTTP服务器句柄
+ * @param fd 客户端socket文件描述符
+ * 
+ * 从客户端链表中移除指定客户端并释放资源
+ */
 void remove_sse_client(httpd_handle_t hd, int fd) {
     if (xSemaphoreTake(sse_mutex, portMAX_DELAY) == pdTRUE) {
         sse_client_t **client = &sse_clients;
@@ -394,7 +488,15 @@ void remove_sse_client(httpd_handle_t hd, int fd) {
     }
 }
 
-// Notify all SSE clients about a new message
+/**
+ * @brief 通知所有SSE客户端新消息
+ * 
+ * @param event_name 事件名称
+ * @param data 事件数据(JSON格式)
+ * 
+ * 向所有连接的SSE客户端发送指定事件和数据
+ * 自动移除发送失败的客户端连接
+ */
 void notify_sse_clients(const char *event_name, const char *data) {
     uint32_t current_time = (uint32_t)time(NULL);
 
@@ -444,9 +546,9 @@ static esp_err_t sse_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Connection", "keep-alive");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-    // Add this client to the SSE clients list
-    int fd = httpd_req_to_sockfd(req);
-    add_sse_client(req->handle, fd);
+    // 将客户端添加到SSE客户端列表
+    int fd = httpd_req_to_sockfd(req);  // 获取客户端socket文件描述符
+    add_sse_client(req->handle, fd);    // 调用函数添加客户端到管理列表
 
     // 检查是否成功添加客户端（可能因为达到上限而被拒绝）
     bool client_added = false;
@@ -493,16 +595,16 @@ static esp_err_t sse_handler(httpd_req_t *req) {
         free(messages_json);
     }
 
-    // Keep the connection open - 减少ping频率以减轻服务器负担
-    int ping_count = 0;
-    bool connection_active = true;
+    // 保持连接开放 - 减少ping频率以减轻服务器负担
+    int ping_count = 0;               // ping计数器
+    bool connection_active = true;    // 连接状态标志
     
     // 注意：如果需要任务看门狗，应在main.c中配置
     // 这里只使用简单的连接检查和超时机制
     
     // 设置最大连接时间（10分钟）
-    uint32_t start_time = (uint32_t)time(NULL);
-    uint32_t max_connection_time = 600; // 10分钟
+    uint32_t start_time = (uint32_t)time(NULL);  // 记录连接开始时间
+    uint32_t max_connection_time = 600;          // 最大连接时间600秒（10分钟）
     
     while (connection_active) {
         vTaskDelay(pdMS_TO_TICKS(2000));  // 增加延迟到2秒
@@ -556,7 +658,22 @@ static esp_err_t options_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler for posting new chat messages
+/**
+ * @brief 处理新聊天消息的POST请求
+ * 
+ * 接收JSON格式的聊天消息，验证后存储到内存和NVS，并通过SSE通知所有客户端
+ * 
+ * @param req HTTP请求对象，包含消息内容和客户端信息
+ * @return ESP_OK 处理成功
+ * @return ESP_FAIL 处理失败
+ * 
+ * 功能说明：
+ * 1. 验证请求内容长度和JSON格式
+ * 2. 检查必填字段(uuid, username, message)和长度限制
+ * 3. 调用add_chat_message存储消息
+ * 4. 通过notify_sse_clients通知所有连接的客户端
+ * 5. 返回适当的HTTP状态码和响应
+ */
 static esp_err_t post_message_handler(httpd_req_t *req) {
     // 设置CORS头
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -661,7 +778,21 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler for generating UUID
+/**
+ * @brief 生成UUID的请求处理函数
+ * 
+ * 使用ESP32硬件随机数生成器创建符合RFC4122标准的UUID v4
+ * 
+ * @param req HTTP请求对象
+ * @return ESP_OK 生成成功
+ * @return ESP_FAIL 生成失败
+ * 
+ * 实现细节：
+ * 1. 调用generate_uuid函数生成16字节随机数
+ * 2. 设置版本位和变体位
+ * 3. 格式化为标准UUID字符串(8-4-4-4-12)
+ * 4. 返回JSON格式的响应
+ */
 static esp_err_t generate_uuid_handler(httpd_req_t *req) {
     // 设置CORS头
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -682,7 +813,24 @@ static esp_err_t generate_uuid_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Register chat server URI handlers
+/**
+ * @brief 注册聊天服务器的URI处理函数
+ * 
+ * 为聊天服务器注册所有必要的HTTP请求处理函数，包括：
+ * - OPTIONS请求处理(CORS)
+ * - SSE事件流
+ * - 消息提交
+ * - UUID生成
+ * 
+ * @param server HTTP服务器句柄
+ * @return ESP_OK 注册成功
+ * @return ESP_FAIL 注册失败
+ * 
+ * 注意事项：
+ * 1. 每个URI处理函数都支持CORS
+ * 2. 使用httpd_uri_t结构定义路由
+ * 3. 错误处理由各处理函数自行完成
+ */
 esp_err_t register_chat_uri_handlers(httpd_handle_t server) {
     // Handler for OPTIONS requests (CORS)
     httpd_uri_t options_uri = {
