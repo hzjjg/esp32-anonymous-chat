@@ -60,9 +60,8 @@ void notify_sse_clients(const char *event_name, const char *data);
  * @brief 客户端断开连接处理函数
  *
  * @param arg 用户参数
- * @param hd HTTP服务器句柄
  * @param sockfd Socket文件描述符
  */
-void chat_disconnect_handler(void* arg, httpd_handle_t hd, int sockfd);
+void chat_disconnect_handler(void* arg, int sockfd);
 
 #endif /* _CHAT_SERVER_H_ */

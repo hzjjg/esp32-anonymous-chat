@@ -1,7 +1,5 @@
 # ESP-IDF 专用
 build/
-sdkconfig
-sdkconfig.old
 dependencies.lock.bak
 managed_components/
 
