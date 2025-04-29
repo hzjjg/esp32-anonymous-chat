@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-100 text-gray-900;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.emoji {
+  display: inline-block;
+  font-size: 1.2em;
+  vertical-align: middle;
+}
