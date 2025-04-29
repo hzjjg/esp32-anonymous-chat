@@ -278,6 +278,10 @@ esp_err_t add_chat_message(const char *uuid, const char *username, const char *m
 // Get chat messages as JSON array
 char* get_chat_messages_json(void) {
     cJSON *root = cJSON_CreateArray();
+    if (root == NULL) {
+        ESP_LOGE(CHAT_TAG, "Failed to create JSON array");
+        return NULL;
+    }
 
     if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
         int start_idx = 0;
@@ -288,6 +292,13 @@ char* get_chat_messages_json(void) {
         for (int i = 0; i < chat_storage.count; i++) {
             int idx = (start_idx + i) % MAX_MESSAGES;
             cJSON *message = cJSON_CreateObject();
+            if (message == NULL) {
+                ESP_LOGE(CHAT_TAG, "Failed to create JSON message object");
+                xSemaphoreGive(chat_mutex);
+                cJSON_Delete(root);
+                return NULL;
+            }
+            
             cJSON_AddStringToObject(message, "uuid", chat_storage.messages[idx].uuid);
             cJSON_AddStringToObject(message, "username", chat_storage.messages[idx].username);
             cJSON_AddStringToObject(message, "message", chat_storage.messages[idx].message);
@@ -318,8 +329,11 @@ static void cleanup_sse_clients(void) {
                 *client_ptr = client->next;
                 ESP_LOGI(CHAT_TAG, "Removing inactive SSE client: %d", client->fd);
 
-                // 尝试发送关闭消息
-                httpd_socket_send(client->hd, client->fd, "event: close\ndata: {}\n\n", 22, 0);
+                // 尝试发送关闭消息，但不依赖发送结果
+                int ret = httpd_socket_send(client->hd, client->fd, "event: close\ndata: {}\n\n", 22, 0);
+                if (ret < 0) {
+                    ESP_LOGW(CHAT_TAG, "Failed to send close event to client %d", client->fd);
+                }
 
                 free(client);
                 sse_client_count--;
@@ -354,6 +368,8 @@ static void add_sse_client(httpd_handle_t hd, int fd) {
             sse_clients = client;
             sse_client_count++;
             ESP_LOGI(CHAT_TAG, "Added SSE client: %d (total: %d)", fd, sse_client_count);
+        } else {
+            ESP_LOGE(CHAT_TAG, "Failed to allocate memory for SSE client");
         }
         xSemaphoreGive(sse_mutex);
     }
@@ -389,8 +405,10 @@ void notify_sse_clients(const char *event_name, const char *data) {
 
             // Format: event: name\ndata: data\n\n
             char *buffer;
-            if (asprintf(&buffer, "event: %s\ndata: %s\n\nretry: %d\n\n",
-                         event_name, data, SSE_RETRY_TIMEOUT) != -1) {
+            int asprintf_result = asprintf(&buffer, "event: %s\ndata: %s\n\nretry: %d\n\n",
+                         event_name, data, SSE_RETRY_TIMEOUT);
+            
+            if (asprintf_result != -1) {
                 int ret = httpd_socket_send(client->hd, client->fd, buffer, strlen(buffer), 0);
                 free(buffer);
 
@@ -405,6 +423,9 @@ void notify_sse_clients(const char *event_name, const char *data) {
                     // 更新最后活动时间
                     client->last_activity = current_time;
                 }
+            } else {
+                ESP_LOGE(CHAT_TAG, "Failed to allocate memory for SSE notification");
+                // 内存分配失败，但不移除客户端，继续处理下一个
             }
 
             client_ptr = &((*client_ptr)->next);
@@ -450,8 +471,10 @@ static esp_err_t sse_handler(httpd_req_t *req) {
     char *messages_json = get_chat_messages_json();
     if (messages_json) {
         char *buffer;
-        if (asprintf(&buffer, "event: messages\ndata: %s\n\nretry: %d\n\n",
-                     messages_json, SSE_RETRY_TIMEOUT) != -1) {
+        int asprintf_result = asprintf(&buffer, "event: messages\ndata: %s\n\nretry: %d\n\n",
+                     messages_json, SSE_RETRY_TIMEOUT);
+        
+        if (asprintf_result != -1) {
             int ret = httpd_socket_send(req->handle, fd, buffer, strlen(buffer), 0);
             free(buffer);
 
@@ -461,15 +484,46 @@ static esp_err_t sse_handler(httpd_req_t *req) {
                 free(messages_json);
                 return ESP_FAIL;
             }
+        } else {
+            ESP_LOGE(CHAT_TAG, "Failed to allocate memory for SSE message");
+            remove_sse_client(req->handle, fd);
+            free(messages_json);
+            return ESP_FAIL;
         }
         free(messages_json);
     }
 
     // Keep the connection open - 减少ping频率以减轻服务器负担
     int ping_count = 0;
-    while (1) {
+    bool connection_active = true;
+    
+    // 注意：如果需要任务看门狗，应在main.c中配置
+    // 这里只使用简单的连接检查和超时机制
+    
+    // 设置最大连接时间（10分钟）
+    uint32_t start_time = (uint32_t)time(NULL);
+    uint32_t max_connection_time = 600; // 10分钟
+    
+    while (connection_active) {
         vTaskDelay(pdMS_TO_TICKS(2000));  // 增加延迟到2秒
 
+        // 检查连接是否仍然有效 - 使用socket发送0字节数据来检测连接状态
+        int check_ret = httpd_socket_send(req->handle, fd, NULL, 0, 0);
+        if (check_ret < 0) {
+            ESP_LOGW(CHAT_TAG, "SSE connection no longer valid, closing");
+            break;
+        }
+        
+        // 检查是否超过最大连接时间
+        uint32_t current_time = (uint32_t)time(NULL);
+        if (current_time - start_time > max_connection_time) {
+            ESP_LOGI(CHAT_TAG, "SSE connection reached maximum time limit (%lu seconds), closing", max_connection_time);
+            // 发送关闭消息
+            const char *close_msg = "event: close\ndata: {\"reason\":\"timeout\"}\n\n";
+            httpd_socket_send(req->handle, fd, close_msg, strlen(close_msg), 0);
+            break;
+        }
+        
         // 每5次循环发送一次ping（10秒一次）
         if (++ping_count >= 5) {
             // 发送ping保持连接
@@ -477,6 +531,7 @@ static esp_err_t sse_handler(httpd_req_t *req) {
             int ret = httpd_socket_send(req->handle, fd, ping, strlen(ping), 0);
             if (ret < 0) {
                 ESP_LOGE(CHAT_TAG, "Failed to send ping, closing connection");
+                connection_active = false;
                 break;
             }
             ping_count = 0;
@@ -569,6 +624,13 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
     if (err == ESP_OK) {
         // Create JSON for the new message
         cJSON *msg_obj = cJSON_CreateObject();
+        if (msg_obj == NULL) {
+            ESP_LOGE(CHAT_TAG, "Failed to create JSON object");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create JSON");
+            cJSON_Delete(root);
+            return ESP_FAIL;
+        }
+        
         cJSON_AddStringToObject(msg_obj, "uuid", uuid);
         cJSON_AddStringToObject(msg_obj, "username", username);
         cJSON_AddStringToObject(msg_obj, "message", message);
@@ -581,6 +643,11 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
         if (msg_json) {
             notify_sse_clients("message", msg_json);
             free(msg_json);
+        } else {
+            ESP_LOGE(CHAT_TAG, "Failed to print JSON message");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create JSON message");
+            cJSON_Delete(root);
+            return ESP_FAIL;
         }
 
         httpd_resp_set_type(req, "application/json");
