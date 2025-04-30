@@ -1,5 +1,5 @@
 <template>
-  <div class="flex mb-5 w-full max-w-[750px] mx-auto group" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
+  <div class="flex mb-5 w-full max-w-[750px] mx-auto group" :class="[isCurrentUser ? 'flex-row-reverse pl-14' : 'flex-row pr-14']">
     <!-- 头像 -->
     <div
       class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-sm transform transition-transform group-hover:scale-105"
