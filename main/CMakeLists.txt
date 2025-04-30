@@ -3,7 +3,7 @@ idf_component_register(SRCS "esp_rest_main.c"
                            "chat_server.c"
                        INCLUDE_DIRS "."
                        EMBED_FILES "../front/dist/index.html"
-                                   "../front/dist/favicon.ico"
+                                   "../front/dist/icon.png"
                                    "../front/dist/assets/index.js"
                                    "../front/dist/assets/index.css")
 
