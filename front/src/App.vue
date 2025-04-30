@@ -6,7 +6,7 @@
   <div v-else class="h-screen flex flex-col">
     <!-- 头部 -->
     <header class="bg-white shadow px-4 py-3 flex justify-between items-center">
-      <h1 class="text-xl font-bold text-blue-600">匿名聊天室</h1>
+      <h1 class="text-xl font-bold text-blue-600">Anonymous chat room</h1>
       <div class="flex items-center space-x-3">
         <div class="text-sm text-gray-500">
           <span class="inline-block w-2 h-2 rounded-full"
@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick, computed, watch } from 'vue'
+import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import ChatMessage from '@/components/ChatMessage.vue'
 import EmojiPicker from '@/components/EmojiPicker.vue'
 import UserSettings from '@/components/UserSettings.vue'
@@ -95,8 +95,8 @@ onMounted(async () => {
   // 初始化用户
   await userStore.initialize()
 
-  // 初始化聊天连接
-  chatStore.initializeSSE()
+  // 初始化聊天
+  await chatStore.initializePolling()
 
   initialized.value = true
 
@@ -104,10 +104,6 @@ onMounted(async () => {
   nextTick(() => {
     scrollToBottom()
   })
-})
-
-onBeforeUnmount(() => {
-  chatStore.closeSSE()
 })
 
 // 监听消息变化，如果应该自动滚动，则滚动到底部

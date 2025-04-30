@@ -28,8 +28,9 @@
 
 static const char *TAG = "example"; // 定义日志标签，用于ESP日志系统
 
-// 声明启动RESTful服务器的函数，在rest_server.c中实现
+// 声明启动和停止RESTful服务器的函数，在rest_server.c中实现
 esp_err_t start_rest_server(const char *base_path);
+esp_err_t stop_rest_server(void);
 
 /**
  * @brief 初始化mDNS服务
@@ -189,6 +190,16 @@ esp_err_t init_fs(void)
 }
 #endif
 
+// 系统关闭回调函数，确保资源被正确释放
+static void shutdown_handler(void)
+{
+    ESP_LOGI(TAG, "System shutdown initiated, cleaning up resources...");
+    // 停止REST服务器（会同时清理聊天存储）
+    stop_rest_server();
+    // 断开网络连接
+    example_disconnect();
+}
+
 /**
  * @brief 应用程序主入口函数
  *
@@ -215,6 +226,9 @@ void app_main(void)
     netbiosns_init();
     // 设置NetBIOS名称，从menuconfig配置中读取，用于Windows网络邻居中显示
     netbiosns_set_name(CONFIG_EXAMPLE_MDNS_HOST_NAME);
+
+    // 注册系统关闭钩子，确保正确清理资源
+    esp_register_shutdown_handler(shutdown_handler);
 
     // 连接到网络（Wi-Fi或以太网，根据menuconfig配置）
     // protocol_examples_common中的函数，处理Wi-Fi/以太网连接细节

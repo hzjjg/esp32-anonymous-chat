@@ -20,6 +20,20 @@
 static const char *CHAT_TAG = "chat-server"; // 日志标签
 
 /**
+ * @brief 设置CORS响应头
+ *
+ * 统一为所有API响应设置CORS头，支持跨域访问
+ *
+ * @param req HTTP请求对象
+ */
+static void set_cors_headers(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
+}
+
+/**
  * @brief 生成UUID v4
  *
  * @param uuid_str 输出参数，用于存储生成的UUID字符串
@@ -74,10 +88,7 @@ esp_err_t chat_server_init(void) {
 
 // 添加OPTIONS请求处理程序，帮助处理CORS
 static esp_err_t options_handler(httpd_req_t *req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
-    httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
+    set_cors_headers(req);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -99,7 +110,7 @@ static esp_err_t options_handler(httpd_req_t *req) {
  */
 static esp_err_t post_message_handler(httpd_req_t *req) {
     // 设置CORS头
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    set_cors_headers(req);
 
     // 检查内容长度是否超过限制
     if (req->content_len > 4096) {
@@ -107,59 +118,74 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    int total_len = req->content_len;
-    int cur_len = 0;
-    char *buf = malloc(total_len + 1);
+    // 一次性分配接收缓冲区
+    char *buf = malloc(req->content_len + 1);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
         return ESP_FAIL;
     }
 
-    int received = 0;
-    while (cur_len < total_len) {
-        received = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
-        if (received <= 0) {
-            free(buf);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
-            return ESP_FAIL;
-        }
-        cur_len += received;
+    // 一次性接收数据
+    int total_received = httpd_req_recv(req, buf, req->content_len);
+    if (total_received != req->content_len) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
+        return ESP_FAIL;
     }
-    buf[total_len] = '\0';
+    buf[req->content_len] = '\0';
 
+    // 解析JSON
     cJSON *root = cJSON_Parse(buf);
-    free(buf);
+    free(buf); // 立即释放接收缓冲区，减少内存占用时间
 
     if (!root) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
         return ESP_FAIL;
     }
 
+    // 提取并验证必要字段
+    const char *uuid = NULL;
+    const char *username = NULL;
+    const char *message = NULL;
+    bool is_valid = true;
+
     cJSON *uuid_obj = cJSON_GetObjectItem(root, "uuid");
     cJSON *username_obj = cJSON_GetObjectItem(root, "username");
     cJSON *message_obj = cJSON_GetObjectItem(root, "message");
 
-    if (!uuid_obj || !username_obj || !message_obj ||
-        !cJSON_IsString(uuid_obj) || !cJSON_IsString(username_obj) || !cJSON_IsString(message_obj)) {
-        cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing required fields");
-        return ESP_FAIL;
+    if (uuid_obj && cJSON_IsString(uuid_obj)) {
+        uuid = uuid_obj->valuestring;
+    } else {
+        is_valid = false;
     }
 
-    const char *uuid = uuid_obj->valuestring;
-    const char *username = username_obj->valuestring;
-    const char *message = message_obj->valuestring;
+    if (username_obj && cJSON_IsString(username_obj)) {
+        username = username_obj->valuestring;
+    } else {
+        is_valid = false;
+    }
 
-    // 验证字段长度
-    if (strlen(uuid) >= MAX_UUID_LENGTH || strlen(username) >= 32 ||
-        strlen(message) > MAX_MESSAGE_LENGTH || strlen(message) == 0) {
+    if (message_obj && cJSON_IsString(message_obj)) {
+        message = message_obj->valuestring;
+    } else {
+        is_valid = false;
+    }
+
+    // 验证字段有效性和长度
+    if (!is_valid || !uuid || !username || !message ||
+        strlen(uuid) >= MAX_UUID_LENGTH ||
+        strlen(username) >= 32 ||
+        strlen(message) > MAX_MESSAGE_LENGTH ||
+        strlen(message) == 0) {
+
         cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid field length");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid message format or field length");
         return ESP_FAIL;
     }
 
     // 添加消息到存储
     esp_err_t err = chat_storage_add_message(uuid, username, message);
+    cJSON_Delete(root);
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -169,7 +195,6 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to add message");
     }
 
-    cJSON_Delete(root);
     return ESP_OK;
 }
 
@@ -181,32 +206,21 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
  * @param req HTTP请求对象
  * @return ESP_OK 生成成功
  * @return ESP_FAIL 生成失败
- *
- * 实现细节：
- * 1. 调用generate_uuid函数生成16字节随机数
- * 2. 设置版本位和变体位
- * 3. 格式化为标准UUID字符串(8-4-4-4-12)
- * 4. 返回JSON格式的响应
  */
 static esp_err_t generate_uuid_handler(httpd_req_t *req) {
     // 设置CORS头，允许跨域访问
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    set_cors_headers(req);
 
     // 生成UUID
     char uuid[MAX_UUID_LENGTH];
     generate_uuid(uuid);
 
-    // 创建JSON响应
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "uuid", uuid);
-
-    // 转换为字符串并发送
-    char *json_str = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
+    // 直接构建简单JSON响应
+    char json_response[60]; // 足够容纳UUID JSON响应
+    snprintf(json_response, sizeof(json_response), "{\"uuid\":\"%s\"}", uuid);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_str);
-    free(json_str);
+    httpd_resp_sendstr(req, json_response);
 
     return ESP_OK;
 }
@@ -223,23 +237,21 @@ static esp_err_t generate_uuid_handler(httpd_req_t *req) {
  */
 static esp_err_t get_messages_since_handler(httpd_req_t *req) {
     // 设置CORS头，允许跨域访问
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    set_cors_headers(req);
 
     // 获取since_timestamp查询参数
-    char *buf = NULL;
-    size_t buf_len = 0;
     uint32_t since_timestamp = 0;
+    char param[32];
 
-    buf_len = httpd_req_get_url_query_len(req) + 1;
-    if (buf_len > 1) {
-        buf = malloc(buf_len);
-        if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
-            char param[32];
-            if (httpd_query_key_value(buf, "since_timestamp", param, sizeof(param)) == ESP_OK) {
-                since_timestamp = (uint32_t)atoi(param);
+    // 如果URL有查询参数
+    if (httpd_req_get_url_query_len(req) > 0) {
+        if (httpd_req_get_url_query_str(req, param, sizeof(param)) == ESP_OK) {
+            // 直接提取since_timestamp参数
+            char value[16];
+            if (httpd_query_key_value(param, "since_timestamp", value, sizeof(value)) == ESP_OK) {
+                since_timestamp = (uint32_t)atoi(value);
             }
         }
-        free(buf);
     }
 
     // 获取匹配消息
@@ -250,19 +262,20 @@ static esp_err_t get_messages_since_handler(httpd_req_t *req) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, json_str);
         free(json_str);
-    } else {
-        // 如果获取消息失败，返回空JSON对象
-        httpd_resp_set_type(req, "application/json");
-        uint32_t current_time = chat_storage_get_current_time();
-        char error_response[128];
-        snprintf(error_response, sizeof(error_response),
-                 "{\"messages\":[],"
-                 "\"server_time\":%lu,"
-                 "\"has_new_messages\":false,"
-                 "\"error\":\"Failed to retrieve messages\"}",
-                 current_time);
-        httpd_resp_sendstr(req, error_response);
+        return ESP_OK;
     }
+
+    // 如果获取消息失败，返回空JSON对象
+    httpd_resp_set_type(req, "application/json");
+    uint32_t current_time = chat_storage_get_current_time();
+    char error_response[128];
+    snprintf(error_response, sizeof(error_response),
+             "{\"messages\":[],"
+             "\"server_time\":%lu,"
+             "\"has_new_messages\":false,"
+             "\"error\":\"Failed to retrieve messages\"}",
+             current_time);
+    httpd_resp_sendstr(req, error_response);
 
     return ESP_OK;
 }

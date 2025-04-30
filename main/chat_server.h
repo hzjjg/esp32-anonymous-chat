@@ -3,34 +3,15 @@
 
 #include "esp_err.h"
 #include "esp_http_server.h"
-#include "chat_storage.h"
 
 /**
  * @brief 初始化聊天服务器
  *
- * 创建互斥锁并从NVS加载历史聊天消息
+ * 初始化聊天存储系统并设置相关资源
  *
  * @return ESP_OK 成功，或错误码
  */
 esp_err_t chat_server_init(void);
-
-/**
- * @brief 添加聊天消息
- *
- * @param uuid 用户UUID
- * @param username 用户名
- * @param message 消息内容
- *
- * @return ESP_OK 成功，或错误码
- */
-esp_err_t add_chat_message(const char *uuid, const char *username, const char *message);
-
-/**
- * @brief 获取聊天消息的JSON字符串
- *
- * @return 聊天消息的JSON字符串，调用者负责释放内存
- */
-char* get_chat_messages_json(void);
 
 /**
  * @brief 注册聊天服务器的URI处理函数

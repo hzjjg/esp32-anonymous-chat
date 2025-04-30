@@ -15,8 +15,11 @@
 #include "esp_vfs.h"         // 虚拟文件系统接口，用于文件操作
 #include "cJSON.h"           // 轻量级JSON解析和生成库，用于处理JSON数据
 #include "chat_server.h"     // 包含聊天服务器相关的函数声明
+#include "chat_storage.h"    // 包含聊天存储相关的函数声明
 
 static const char *REST_TAG = "esp-rest"; // 定义日志标签，用于ESP日志系统
+static httpd_handle_t server_instance = NULL; // 存储服务器实例句柄
+static rest_server_context_t *rest_context = NULL; // 存储REST上下文
 
 // 检查宏，用于检查条件a，如果为假，则打印错误日志并跳转到goto_tag
 // 这是一个辅助宏，简化错误处理流程，提高代码可读性
@@ -195,7 +198,7 @@ esp_err_t start_rest_server(const char *base_path)
 {
     REST_CHECK(base_path, "wrong base path", err); // 检查base_path是否有效
     // 分配REST服务器上下文内存
-    rest_server_context_t *rest_context = calloc(1, sizeof(rest_server_context_t));
+    rest_context = calloc(1, sizeof(rest_server_context_t));
     REST_CHECK(rest_context, "No memory for rest context", err);
     // 复制根目录路径到上下文
     strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
@@ -208,6 +211,9 @@ esp_err_t start_rest_server(const char *base_path)
     ESP_LOGI(REST_TAG, "Starting HTTP Server");
     // 启动HTTP服务器
     REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);
+
+    // 保存服务器实例句柄以便于后续停止服务器
+    server_instance = server;
 
     /* 注册系统信息API路由 */
     httpd_uri_t system_info_get_uri = {
@@ -242,6 +248,41 @@ esp_err_t start_rest_server(const char *base_path)
     return ESP_OK;
 err_start: // 启动服务器失败的错误处理标签
     free(rest_context);
+    rest_context = NULL;
 err: // 其他错误的错误处理标签
     return ESP_FAIL;
+}
+
+/**
+ * @brief 停止RESTful API服务器并释放资源
+ *
+ * 停止HTTP服务器，释放分配的资源，确保聊天存储系统正确清理
+ *
+ * @return esp_err_t ESP_OK表示成功，ESP_FAIL表示失败
+ */
+esp_err_t stop_rest_server(void)
+{
+    esp_err_t err = ESP_OK;
+
+    // 如果服务器实例存在，停止它
+    if (server_instance != NULL) {
+        ESP_LOGI(REST_TAG, "Stopping HTTP Server");
+        err = httpd_stop(server_instance);
+        if (err != ESP_OK) {
+            ESP_LOGE(REST_TAG, "Failed to stop HTTP server: %s", esp_err_to_name(err));
+        }
+        server_instance = NULL;
+    }
+
+    // 释放REST上下文资源
+    if (rest_context != NULL) {
+        free(rest_context);
+        rest_context = NULL;
+    }
+
+    // 清理聊天存储系统，确保所有消息都被保存
+    chat_storage_deinit();
+
+    ESP_LOGI(REST_TAG, "HTTP Server stopped and resources released");
+    return err;
 }

@@ -9,13 +9,16 @@
 #define MAX_MESSAGES 100       // 最大存储消息数量
 #define MAX_MESSAGE_LENGTH 150  // 单条消息最大长度
 #define MAX_UUID_LENGTH 37      // UUID最大长度(36字符+空终止符)
+#define MAX_USERNAME_LENGTH 32  // 用户名最大长度
 #define NVS_MSG_KEY_PREFIX "msg_" // NVS存储消息的键前缀
 #define NVS_MSG_COUNT_KEY "msg_count" // NVS存储消息总数的键
+#define CACHE_VALID_TIME 30    // 缓存有效时间(秒)
+#define MIN_MESSAGES_TO_SAVE 5 // 最少累积消息数量触发保存
 
 /* 聊天消息结构体 */
 typedef struct {
     char uuid[MAX_UUID_LENGTH];      // 消息唯一标识符
-    char username[32];               // 用户名
+    char username[MAX_USERNAME_LENGTH]; // 用户名
     char message[MAX_MESSAGE_LENGTH]; // 消息内容
     uint32_t timestamp;             // 时间戳
 } chat_message_t;
@@ -71,5 +74,12 @@ char* chat_storage_get_messages_since_json(uint32_t since_timestamp, bool *has_n
  * @return uint32_t 当前时间戳
  */
 uint32_t chat_storage_get_current_time(void);
+
+/**
+ * @brief 释放聊天存储系统资源
+ *
+ * 保存所有未保存的消息并释放资源
+ */
+void chat_storage_deinit(void);
 
 #endif /* _CHAT_STORAGE_H_ */
