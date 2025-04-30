@@ -21,7 +21,7 @@
     <main class="flex-1 bg-gray-100 overflow-hidden flex flex-col">
       <div
         ref="messagesContainer"
-        class="flex-1 overflow-y-auto p-4 flex flex-col"
+        class="flex-1 overflow-y-auto p-4 flex flex-col  mx-auto w-full"
         @scroll="handleScroll"
       >
         <template v-if="chatStore.messages.length > 0">
@@ -29,7 +29,6 @@
             v-for="message in chatStore.messages"
             :key="`${message.uuid}-${message.timestamp}`"
             :message="message"
-            class="flex flex-col"
           />
         </template>
         <div v-else class="flex-1 flex items-center justify-center text-gray-400">
@@ -44,7 +43,7 @@
             v-model="messageInput"
             class="flex-1 bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
             :class="{ 'border-red-500': isOverLimit }"
-            rows="2"
+            rows="3"
             placeholder="请输入消息..."
             @keydown.enter.prevent="sendMessage"
           ></textarea>
