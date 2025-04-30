@@ -305,10 +305,6 @@ char* chat_storage_get_messages_since_json(uint32_t since_timestamp, bool *has_n
         return NULL;
     }
 
-    // 添加当前服务器时间
-    uint32_t current_time = chat_storage_get_current_time();
-    cJSON_AddNumberToObject(response, "server_time", current_time);
-
     // 创建消息数组
     cJSON *messages_array = cJSON_CreateArray();
     if (!messages_array) {
@@ -614,7 +610,7 @@ esp_err_t chat_storage_add_message(const char *uuid, const char *username, const
 
             // 使用单独任务保存，避免阻塞主线程
             TaskHandle_t save_task_handle = NULL;
-            if (xTaskCreate(save_chat_history_task, "save_chat", 4096, NULL, 5, &save_task_handle) != pdPASS) {
+            if (xTaskCreate(save_chat_history_task, "save_chat", 8192, NULL, 5, &save_task_handle) != pdPASS) {
                 ESP_LOGW(STORAGE_TAG, "Failed to create save task, saving synchronously");
                 save_chat_history();
             }

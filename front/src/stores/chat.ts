@@ -22,6 +22,9 @@ export const useChatStore = defineStore('chat', () => {
     // 重置重连计数
     reconnectAttempts.value = 0
 
+    // 设置初始时间戳为今天0点
+    lastTimestamp.value = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000)
+
     // 先获取初始消息列表
     const success = await fetchMessages()
 
@@ -67,10 +70,8 @@ export const useChatStore = defineStore('chat', () => {
         isConnected.value = true
       }
 
-      // 更新服务器时间
-      if (data.server_time) {
-        lastTimestamp.value = data.server_time
-      }
+      // 更新客户端时间戳为当前时间
+      lastTimestamp.value = Math.floor(Date.now() / 1000)
 
       // 处理新消息
       if (data.has_new_messages && data.messages && data.messages.length > 0) {

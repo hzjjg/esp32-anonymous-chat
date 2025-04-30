@@ -267,14 +267,11 @@ static esp_err_t get_messages_since_handler(httpd_req_t *req) {
 
     // 如果获取消息失败，返回空JSON对象
     httpd_resp_set_type(req, "application/json");
-    uint32_t current_time = chat_storage_get_current_time();
     char error_response[128];
     snprintf(error_response, sizeof(error_response),
              "{\"messages\":[],"
-             "\"server_time\":%lu,"
              "\"has_new_messages\":false,"
-             "\"error\":\"Failed to retrieve messages\"}",
-             current_time);
+             "\"error\":\"Failed to retrieve messages\"}");
     httpd_resp_sendstr(req, error_response);
 
     return ESP_OK;
