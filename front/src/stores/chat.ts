@@ -70,8 +70,8 @@ export const useChatStore = defineStore('chat', () => {
         isConnected.value = true
       }
 
-      // 更新客户端时间戳为当前时间
-      lastTimestamp.value = Math.floor(Date.now() / 1000)
+      // 更新客户端时间戳为最新一条消息的时间戳
+      lastTimestamp.value = data.messages[data.messages.length - 1].timestamp || lastTimestamp.value
 
       // 处理新消息
       if (data.has_new_messages && data.messages && data.messages.length > 0) {
