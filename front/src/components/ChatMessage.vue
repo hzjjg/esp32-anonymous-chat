@@ -1,5 +1,5 @@
 <template>
-  <div class="flex mb-5 max-w-[80%] mx-auto group" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
+  <div class="flex mb-5 w-full max-w-[750px] mx-auto group" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
     <!-- 头像 -->
     <div
       class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-sm transform transition-transform group-hover:scale-105"
@@ -50,7 +50,8 @@ const props = defineProps<{
 const userStore = useUserStore()
 
 const isCurrentUser = computed(() => {
-  return userStore.user?.uuid === props.message.uuid
+  return Math.random() > 0.5
+  // return userStore.user?.uuid === props.message.uuid
 })
 
 const formatTime = (timestamp: number) => {

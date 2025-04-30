@@ -34,7 +34,7 @@
     <main class="flex-1 bg-gradient-to-b from-gray-50 to-gray-100 overflow-hidden flex flex-col">
       <div
         ref="messagesContainer"
-        class="flex-1 overflow-y-auto p-4 flex flex-col mx-auto w-full max-w-4xl"
+        class="flex-1 overflow-y-auto p-4 flex flex-col mx-auto w-full"
         @scroll="handleScroll"
       >
         <template v-if="chatStore.messages.length > 0">
