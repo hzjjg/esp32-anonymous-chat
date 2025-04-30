@@ -222,7 +222,7 @@ void app_main(void)
     // 初始化文件系统（根据配置选择Semihost、SD卡或SPIFFS）
     ESP_ERROR_CHECK(init_fs());
 
-    // 初始化聊天服务器，设置消息存储和SSE事件推送机制
+    // 初始化聊天服务器，设置消息存储和管理机制
     ESP_ERROR_CHECK(chat_server_init());
 
     // 启动RESTful API服务器，Web根目录从menuconfig配置中读取

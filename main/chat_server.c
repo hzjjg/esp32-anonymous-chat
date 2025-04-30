@@ -2,9 +2,8 @@
  * ESP32匿名聊天服务器实现
  * 主要功能：
  * 1. 通过HTTP服务器提供RESTful API接口
- * 2. 使用SSE(Server-Sent Events)实现实时消息推送
- * 3. 使用NVS(非易失性存储)持久化聊天记录
- * 4. 线程安全的消息存储和访问机制
+ * 2. 使用NVS(非易失性存储)持久化聊天记录
+ * 3. 线程安全的消息存储和访问机制
  */
 
 #include <string.h>
@@ -243,59 +242,6 @@ static void generate_uuid(char *uuid_str) {
 }
 
 /**
- * @brief 通知所有SSE客户端新消息
- *
- * @param event_name 事件名称，如"message"、"ping"等
- * @param data 事件数据(JSON格式)，包含要推送的具体内容
- *
- * 该函数实现实时消息推送的核心功能：
- * 1. 遍历所有已连接的SSE客户端
- * 2. 构造标准SSE格式的消息（event/data/retry格式）
- * 3. 尝试发送消息，如果失败则移除客户端
- * 4. 更新客户端最后活动时间
- * 5. 自动处理内存管理，确保无内存泄漏
- */
-void notify_sse_clients(const char *event_name, const char *data) {
-    uint32_t current_time = (uint32_t)time(NULL);
-
-    if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
-        sse_client_t **client_ptr = &sse_clients;
-        while (*client_ptr) {
-            sse_client_t *client = *client_ptr;
-
-            // 构造SSE消息格式: event: name\ndata: data\n\n
-            char *buffer;
-            int asprintf_result = asprintf(&buffer, "event: %s\ndata: %s\n\nretry: %d\n\n",
-                         event_name, data, SSE_RETRY_TIMEOUT);
-
-            if (asprintf_result != -1) {
-                // 尝试发送消息到客户端
-                int ret = httpd_socket_send(client->hd, client->fd, buffer, strlen(buffer), 0);
-                free(buffer);
-
-                if (ret < 0) {
-                    // 发送失败，移除客户端
-                    *client_ptr = client->next;
-                    ESP_LOGI(CHAT_TAG, "Failed to notify client %d, removing", client->fd);
-                    free(client);
-                    sse_client_count--;
-                    continue;
-                } else {
-                    // 更新最后活动时间
-                    client->last_activity = current_time;
-                }
-            } else {
-                ESP_LOGE(CHAT_TAG, "Failed to allocate memory for SSE notification");
-                // 内存分配失败，但不移除客户端，继续处理下一个
-            }
-
-            client_ptr = &((*client_ptr)->next);
-        }
-        xSemaphoreGive(chat_mutex);
-    }
-}
-
-/**
  * @brief 初始化聊天服务器
  *
  * 创建必要的互斥锁并从NVS加载历史聊天消息
@@ -472,7 +418,7 @@ static esp_err_t options_handler(httpd_req_t *req) {
 /**
  * @brief 处理新聊天消息的POST请求
  *
- * 接收JSON格式的聊天消息，验证后存储到内存和NVS，并通过SSE通知所有客户端
+ * 接收JSON格式的聊天消息，验证后存储到内存和NVS
  *
  * @param req HTTP请求对象，包含消息内容和客户端信息
  * @return ESP_OK 处理成功
@@ -482,8 +428,7 @@ static esp_err_t options_handler(httpd_req_t *req) {
  * 1. 验证请求内容长度和JSON格式
  * 2. 检查必填字段(uuid, username, message)和长度限制
  * 3. 调用add_chat_message存储消息
- * 4. 通过notify_sse_clients通知所有连接的客户端
- * 5. 返回适当的HTTP状态码和响应
+ * 4. 返回适当的HTTP状态码和响应
  */
 static esp_err_t post_message_handler(httpd_req_t *req) {
     // 设置CORS头

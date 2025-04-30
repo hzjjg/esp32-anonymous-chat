@@ -40,28 +40,4 @@ char* get_chat_messages_json(void);
  */
 esp_err_t register_chat_uri_handlers(httpd_handle_t server);
 
-/**
- * @brief 移除SSE客户端
- *
- * @param hd HTTP服务器句柄
- * @param fd Socket文件描述符
- */
-void remove_sse_client(httpd_handle_t hd, int fd);
-
-/**
- * @brief 向所有SSE客户端发送通知
- *
- * @param event_name 事件名
- * @param data 数据（JSON字符串）
- */
-void notify_sse_clients(const char *event_name, const char *data);
-
-/**
- * @brief 客户端断开连接处理函数
- *
- * @param arg 用户参数
- * @param sockfd Socket文件描述符
- */
-void chat_disconnect_handler(void* arg, int sockfd);
-
 #endif /* _CHAT_SERVER_H_ */

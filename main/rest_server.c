@@ -205,11 +205,6 @@ esp_err_t start_rest_server(const char *base_path)
     config.max_open_sockets = 7; // 将最大并发连接数从16修改为7，以符合系统限制
     config.uri_match_fn = httpd_uri_match_wildcard; // 启用通配符URI匹配，支持模式如/api/*
 
-    // 添加断开连接的处理程序，用于清理聊天客户端列表
-    config.lru_purge_enable = true; // 启用LRU连接清理，在连接数达到上限时自动关闭最不活跃的连接
-    config.open_fn = NULL; // 连接建立时的回调，这里未使用
-    config.close_fn = chat_disconnect_handler; // 连接关闭时的回调，用于移除SSE客户端
-
     ESP_LOGI(REST_TAG, "Starting HTTP Server");
     // 启动HTTP服务器
     REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);
@@ -232,7 +227,7 @@ esp_err_t start_rest_server(const char *base_path)
     };
     httpd_register_uri_handler(server, &temperature_data_get_uri);
 
-    // 注册聊天服务器相关的URI处理函数 (SSE事件流, POST消息, GET UUID)
+    // 注册聊天服务器相关的URI处理函数
     register_chat_uri_handlers(server);
 
     /* 注册通用文件处理路由(通配符匹配) */
