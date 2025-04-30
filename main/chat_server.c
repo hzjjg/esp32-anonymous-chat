@@ -257,7 +257,7 @@ static esp_err_t get_messages_since_handler(httpd_req_t *req) {
         char error_response[128];
         snprintf(error_response, sizeof(error_response),
                  "{\"messages\":[],"
-                 "\"server_time\":%u,"
+                 "\"server_time\":%lu,"
                  "\"has_new_messages\":false,"
                  "\"error\":\"Failed to retrieve messages\"}",
                  current_time);

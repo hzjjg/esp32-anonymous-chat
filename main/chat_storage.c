@@ -235,6 +235,9 @@ char* chat_storage_get_messages_since_json(uint32_t since_timestamp, bool *has_n
     return json_str;
 }
 
+// 添加消息计数器，用于批量保存
+static int new_messages_count = 0;
+
 /**
  * @brief 保存聊天历史到NVS
  *
@@ -251,43 +254,55 @@ static esp_err_t save_chat_history(void) {
         return err;
     }
 
+    // 先复制需要的数据，减少锁持有时间
+    int count, start_idx = 0;
+    chat_message_t messages_to_save[MAX_MESSAGES];
+
     if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
-        // 保存消息计数
-        err = nvs_set_i32(nvs_handle, NVS_MSG_COUNT_KEY, chat_storage.count);
-        if (err != ESP_OK) {
-            ESP_LOGE(STORAGE_TAG, "Error saving message count: %s", esp_err_to_name(err));
-            xSemaphoreGive(chat_mutex);
-            nvs_close(nvs_handle);
-            return err;
-        }
+        count = chat_storage.count;
 
         // 计算开始索引
-        int start_idx = 0;
-        if (chat_storage.count == MAX_MESSAGES) {
+        if (count == MAX_MESSAGES) {
             start_idx = chat_storage.next_index;
         }
 
-        // 保存每条消息
-        bool save_error = false;
-        for (int i = 0; i < chat_storage.count; i++) {
+        // 复制消息数据到临时数组
+        for (int i = 0; i < count; i++) {
             int msg_idx = (start_idx + i) % MAX_MESSAGES;
-            err = save_message_to_nvs(nvs_handle, i, &chat_storage.messages[msg_idx]);
-            if (err != ESP_OK) {
-                ESP_LOGE(STORAGE_TAG, "Error saving message %d: %s", i, esp_err_to_name(err));
-                save_error = true;
-                break;
-            }
+            memcpy(&messages_to_save[i], &chat_storage.messages[msg_idx], sizeof(chat_message_t));
         }
 
         xSemaphoreGive(chat_mutex);
+    } else {
+        nvs_close(nvs_handle);
+        return ESP_FAIL;
+    }
 
-        if (!save_error) {
-            err = nvs_commit(nvs_handle);
-            if (err != ESP_OK) {
-                ESP_LOGE(STORAGE_TAG, "Error committing NVS: %s", esp_err_to_name(err));
-            } else {
-                ESP_LOGI(STORAGE_TAG, "Chat history saved successfully (%d messages)", chat_storage.count);
-            }
+    // 保存消息计数
+    err = nvs_set_i32(nvs_handle, NVS_MSG_COUNT_KEY, count);
+    if (err != ESP_OK) {
+        ESP_LOGE(STORAGE_TAG, "Error saving message count: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    // 保存每条消息
+    bool save_error = false;
+    for (int i = 0; i < count; i++) {
+        err = save_message_to_nvs(nvs_handle, i, &messages_to_save[i]);
+        if (err != ESP_OK) {
+            ESP_LOGE(STORAGE_TAG, "Error saving message %d: %s", i, esp_err_to_name(err));
+            save_error = true;
+            break;
+        }
+    }
+
+    if (!save_error) {
+        err = nvs_commit(nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(STORAGE_TAG, "Error committing NVS: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGI(STORAGE_TAG, "Chat history saved successfully (%d messages)", count);
         }
     }
 
@@ -376,10 +391,17 @@ esp_err_t chat_storage_add_message(const char *uuid, const char *username, const
             chat_storage.count++;
         }
 
+        // 增加新消息计数
+        new_messages_count++;
+
         xSemaphoreGive(chat_mutex);
 
-        // 持久化到NVS（非易失性存储）
-        save_chat_history();
+        // 当积累足够多消息(5条)或消息较少但已过半时进行持久化
+        if (new_messages_count >= 5 || (chat_storage.count < 10 && new_messages_count >= chat_storage.count / 2)) {
+            new_messages_count = 0;
+            // 持久化到NVS（非易失性存储）
+            save_chat_history();
+        }
 
         return ESP_OK;
     }
