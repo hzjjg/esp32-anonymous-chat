@@ -1,24 +1,35 @@
 <template>
-  <div class="flex mb-4 max-w-[80%] mx-auto" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
+  <div class="flex mb-5 max-w-[80%] mx-auto group" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
     <!-- 头像 -->
-    <div class="flex-shrink-0 w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-xl">
+    <div
+      class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-sm transform transition-transform group-hover:scale-105"
+      :class="[
+        isCurrentUser
+          ? 'bg-gradient-to-br from-blue-400 to-indigo-500 ml-2'
+          : 'bg-gradient-to-br from-gray-200 to-gray-300 mr-2'
+      ]"
+    >
       {{ getUserEmoji() }}
     </div>
 
     <!-- 消息内容区 -->
-    <div class="flex flex-col mx-2" :class="[isCurrentUser ? 'items-end mr-2' : 'items-start ml-2']">
+    <div class="flex flex-col max-w-[calc(100%-3rem)]" :class="[isCurrentUser ? 'items-end mr-2' : 'items-start ml-2']">
       <!-- 用户名和时间 -->
-      <div class="flex items-center mb-1 text-xs text-gray-500" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
-        <div class="font-medium">{{ message.username }}</div>
-        <div class="mx-1">·</div>
-        <div>{{ formatTime(message.timestamp) }}</div>
+      <div class="flex items-center mb-1.5 text-xs" :class="[isCurrentUser ? 'flex-row-reverse' : 'flex-row']">
+        <div class="font-medium" :class="isCurrentUser ? 'text-blue-600' : 'text-gray-700'">
+          {{ message.username }}
+        </div>
+        <div class="mx-1 opacity-50">·</div>
+        <div class="text-gray-400">{{ formatTime(message.timestamp) }}</div>
       </div>
 
       <!-- 消息气泡 -->
       <div
-        class="p-3 rounded-lg break-words whitespace-pre-wrap max-w-[400px]"
+        class="p-3.5 rounded-2xl break-words whitespace-pre-wrap max-w-full message-bubble transition-shadow"
         :class="[
-          isCurrentUser ? 'bg-blue-500 text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none shadow-sm'
+          isCurrentUser
+            ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-tr-none shadow-md'
+            : 'bg-white text-gray-800 rounded-tl-none shadow-sm hover:shadow'
         ]"
       >
         {{ message.message }}
@@ -68,3 +79,34 @@ const getUserEmoji = () => {
   return emojis[emojiIndex]
 }
 </script>
+
+<style scoped>
+.message-bubble {
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+/* 添加消息气泡尖角 */
+.message-bubble::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  top: 8px;
+}
+
+/* 左侧消息气泡尖角 */
+.rounded-tl-none::before {
+  left: -8px;
+  border-width: 0 8px 8px 0;
+  border-color: transparent white transparent transparent;
+}
+
+/* 右侧消息气泡尖角 */
+.rounded-tr-none::before {
+  right: -8px;
+  border-width: 8px 8px 0 0;
+  border-color: #3b82f6 transparent transparent transparent;
+}
+</style>
