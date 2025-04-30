@@ -22,8 +22,9 @@ export const useChatStore = defineStore('chat', () => {
     // 重置重连计数
     reconnectAttempts.value = 0
 
-    // 设置初始时间戳为今天0点
-    lastTimestamp.value = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000)
+    // 设置初始时间戳为一个较早的时间，确保能获取到所有消息
+    // 使用UTC时间戳，更符合服务器使用的time(NULL)
+    lastTimestamp.value = 0
 
     // 先获取初始消息列表
     const success = await fetchMessages()
@@ -70,17 +71,19 @@ export const useChatStore = defineStore('chat', () => {
         isConnected.value = true
       }
 
-      // 更新客户端时间戳为最新一条消息的时间戳
-      lastTimestamp.value = data.messages[data.messages.length - 1].timestamp || lastTimestamp.value
-
       // 处理新消息
       if (data.has_new_messages && data.messages && data.messages.length > 0) {
         // 添加新消息到列表
         for (const message of data.messages) {
           addMessage(message)
         }
-      }
 
+        // 更新客户端时间戳为最新一条消息的时间戳
+        const lastMessage = data.messages[data.messages.length - 1];
+        if (lastMessage && lastMessage.timestamp) {
+          lastTimestamp.value = lastMessage.timestamp;
+        }
+      }
       return true
     } catch (error) {
       console.error('轮询消息失败:', error)
@@ -135,6 +138,9 @@ export const useChatStore = defineStore('chat', () => {
     if (!userStore.user) return false
 
     try {
+      // 获取当前UTC时间戳
+      const currentTimestamp = Math.floor(Date.now() / 1000)
+
       const response = await fetch('/api/chat/message', {
         method: 'POST',
         headers: {
@@ -143,7 +149,8 @@ export const useChatStore = defineStore('chat', () => {
         body: JSON.stringify({
           uuid: userStore.user.uuid,
           username: userStore.user.username,
-          message: content
+          message: content,
+          timestamp: currentTimestamp // 添加时间戳字段
         })
       })
 

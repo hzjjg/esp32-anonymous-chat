@@ -587,7 +587,69 @@ esp_err_t chat_storage_add_message(const char *uuid, const char *username, const
         strlcpy(chat_storage.messages[idx].uuid, uuid, MAX_UUID_LENGTH);
         strlcpy(chat_storage.messages[idx].username, username, MAX_USERNAME_LENGTH);
         strlcpy(chat_storage.messages[idx].message, message, MAX_MESSAGE_LENGTH);
-        chat_storage.messages[idx].timestamp = chat_storage_get_current_time();
+
+        // 使用客户端提供的时间戳或当前时间戳（如果客户端未提供）
+        uint32_t server_time = chat_storage_get_current_time();
+        chat_storage.messages[idx].timestamp = server_time;
+
+        // 更新环形缓冲区指针和消息计数
+        chat_storage.next_index = (chat_storage.next_index + 1) % MAX_MESSAGES;
+        if (chat_storage.count < MAX_MESSAGES) {
+            chat_storage.count++;
+        }
+
+        // 增加新消息计数
+        new_messages_count++;
+
+        xSemaphoreGive(chat_mutex);
+
+        // 使缓存失效，因为消息已更新
+        invalidate_cache();
+
+        // 简化持久化策略：当累积超过MIN_MESSAGES_TO_SAVE条消息时保存
+        if (new_messages_count >= MIN_MESSAGES_TO_SAVE) {
+            ESP_LOGI(STORAGE_TAG, "Saving chat history after %d new messages", new_messages_count);
+            new_messages_count = 0;
+
+            // 使用单独任务保存，避免阻塞主线程
+            TaskHandle_t save_task_handle = NULL;
+            if (xTaskCreate(save_chat_history_task, "save_chat", 8192, NULL, 5, &save_task_handle) != pdPASS) {
+                ESP_LOGW(STORAGE_TAG, "Failed to create save task, saving synchronously");
+                save_chat_history();
+            }
+        }
+
+        return ESP_OK;
+    }
+
+    return ESP_FAIL;
+}
+
+/**
+ * @brief 添加带时间戳的聊天消息
+ *
+ * @param uuid 用户唯一标识符
+ * @param username 用户名
+ * @param message 消息内容
+ * @param timestamp 客户端提供的时间戳
+ * @return ESP_OK 添加成功
+ * @return ESP_FAIL 添加失败
+ */
+esp_err_t chat_storage_add_message_with_timestamp(const char *uuid, const char *username, const char *message, uint32_t timestamp) {
+    if (!uuid || !username || !message) {
+        ESP_LOGE(STORAGE_TAG, "Invalid parameters: NULL pointer");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
+        // 获取当前存储位置
+        int idx = chat_storage.next_index;
+
+        // 复制消息数据到存储结构
+        strlcpy(chat_storage.messages[idx].uuid, uuid, MAX_UUID_LENGTH);
+        strlcpy(chat_storage.messages[idx].username, username, MAX_USERNAME_LENGTH);
+        strlcpy(chat_storage.messages[idx].message, message, MAX_MESSAGE_LENGTH);
+        chat_storage.messages[idx].timestamp = timestamp;
 
         // 更新环形缓冲区指针和消息计数
         chat_storage.next_index = (chat_storage.next_index + 1) % MAX_MESSAGES;

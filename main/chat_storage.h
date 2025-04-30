@@ -51,6 +51,18 @@ esp_err_t chat_storage_init(void);
 esp_err_t chat_storage_add_message(const char *uuid, const char *username, const char *message);
 
 /**
+ * @brief 添加带时间戳的聊天消息
+ *
+ * @param uuid 用户唯一标识符
+ * @param username 用户名
+ * @param message 消息内容
+ * @param timestamp 客户端提供的时间戳
+ * @return ESP_OK 添加成功
+ * @return ESP_FAIL 添加失败
+ */
+esp_err_t chat_storage_add_message_with_timestamp(const char *uuid, const char *username, const char *message, uint32_t timestamp);
+
+/**
  * @brief 获取所有聊天消息的JSON字符串
  *
  * @return char* JSON字符串指针，调用者负责释放内存

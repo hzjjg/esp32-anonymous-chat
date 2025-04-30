@@ -94,6 +94,19 @@ static esp_err_t options_handler(httpd_req_t *req) {
 }
 
 /**
+ * @brief 添加带时间戳的消息
+ *
+ * @param uuid 用户UUID
+ * @param username 用户名
+ * @param message 消息内容
+ * @param timestamp 客户端时间戳
+ * @return esp_err_t
+ */
+esp_err_t chat_add_message_with_timestamp(const char *uuid, const char *username, const char *message, uint32_t timestamp) {
+    return chat_storage_add_message_with_timestamp(uuid, username, message, timestamp);
+}
+
+/**
  * @brief 处理新聊天消息的POST请求
  *
  * 接收JSON格式的聊天消息，验证后存储到内存和NVS
@@ -147,11 +160,13 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
     const char *uuid = NULL;
     const char *username = NULL;
     const char *message = NULL;
+    uint32_t timestamp = 0;
     bool is_valid = true;
 
     cJSON *uuid_obj = cJSON_GetObjectItem(root, "uuid");
     cJSON *username_obj = cJSON_GetObjectItem(root, "username");
     cJSON *message_obj = cJSON_GetObjectItem(root, "message");
+    cJSON *timestamp_obj = cJSON_GetObjectItem(root, "timestamp");
 
     if (uuid_obj && cJSON_IsString(uuid_obj)) {
         uuid = uuid_obj->valuestring;
@@ -171,6 +186,11 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
         is_valid = false;
     }
 
+    // 时间戳是可选的
+    if (timestamp_obj && cJSON_IsNumber(timestamp_obj)) {
+        timestamp = (uint32_t)timestamp_obj->valueint;
+    }
+
     // 验证字段有效性和长度
     if (!is_valid || !uuid || !username || !message ||
         strlen(uuid) >= MAX_UUID_LENGTH ||
@@ -184,7 +204,17 @@ static esp_err_t post_message_handler(httpd_req_t *req) {
     }
 
     // 添加消息到存储
-    esp_err_t err = chat_storage_add_message(uuid, username, message);
+    esp_err_t err;
+    if (timestamp > 0) {
+        // 使用客户端提供的时间戳
+        err = chat_storage_add_message_with_timestamp(uuid, username, message, timestamp);
+        ESP_LOGI(CHAT_TAG, "使用客户端时间戳: %" PRIu32, timestamp);
+    } else {
+        // 使用服务器时间戳
+        err = chat_storage_add_message(uuid, username, message);
+        ESP_LOGI(CHAT_TAG, "使用服务器时间戳");
+    }
+
     cJSON_Delete(root);
 
     if (err == ESP_OK) {
