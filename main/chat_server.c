@@ -26,7 +26,7 @@
 #define MAX_MESSAGE_LENGTH 150  // 单条消息最大长度
 #define MAX_UUID_LENGTH 37      // UUID最大长度(36字符+空终止符)
 #define SSE_RETRY_TIMEOUT 3000  // SSE客户端重连超时时间(毫秒)
-#define MAX_SSE_CLIENTS 10      // 最大SSE客户端连接数
+#define MAX_SSE_CLIENTS 4       // 最大SSE客户端连接数，减小以适应HTTP服务器的连接限制
 #define NVS_MSG_KEY_PREFIX "msg_" // NVS存储消息的键前缀
 #define NVS_MSG_COUNT_KEY "msg_count" // NVS存储消息总数的键
 

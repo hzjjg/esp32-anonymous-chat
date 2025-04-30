@@ -6,15 +6,15 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
-#include <string.h>
-#include <fcntl.h>
-#include "esp_http_server.h"
-#include "esp_chip_info.h"
-#include "esp_random.h"
-#include "esp_log.h"
-#include "esp_vfs.h"
-#include "cJSON.h"
-#include "chat_server.h" // 包含聊天服务器相关的函数声明
+#include <string.h>          // 提供字符串操作函数，如strcpy、strcmp等
+#include <fcntl.h>           // 提供文件控制选项，用于文件操作的标志如O_RDONLY
+#include "esp_http_server.h" // ESP32的HTTP服务器库，提供创建和管理HTTP服务器的功能
+#include "esp_chip_info.h"   // 提供获取ESP32芯片信息的功能，如芯片型号、核心数等
+#include "esp_random.h"      // 提供随机数生成功能
+#include "esp_log.h"         // ESP32的日志系统，用于输出调试和信息日志
+#include "esp_vfs.h"         // 虚拟文件系统接口，用于文件操作
+#include "cJSON.h"           // 轻量级JSON解析和生成库，用于处理JSON数据
+#include "chat_server.h"     // 包含聊天服务器相关的函数声明
 
 static const char *REST_TAG = "esp-rest"; // 定义日志标签，用于ESP日志系统
 
@@ -265,7 +265,7 @@ esp_err_t start_rest_server(const char *base_path)
 
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG(); // 获取默认HTTP服务器配置
-    config.max_open_sockets = 16; // 增加最大并发连接数，以支持更多SSE客户端，默认值通常较小
+    config.max_open_sockets = 7; // 将最大并发连接数从16修改为7，以符合系统限制
     config.uri_match_fn = httpd_uri_match_wildcard; // 启用通配符URI匹配，支持模式如/api/*
 
     // 添加断开连接的处理程序，用于清理聊天客户端列表
