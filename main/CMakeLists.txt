@@ -1,6 +1,7 @@
 idf_component_register(SRCS "esp_rest_main.c"
                            "rest_server.c"
                            "chat_server.c"
+                           "chat_storage.c"
                        INCLUDE_DIRS "."
                        EMBED_FILES "../front/dist/index.html"
                                    "../front/dist/icon.png"

@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include "esp_http_server.h"
+#include "chat_storage.h"
 
 /**
  * @brief 初始化聊天服务器
