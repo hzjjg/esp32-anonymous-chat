@@ -55,7 +55,7 @@ static esp_err_t save_message_to_nvs(nvs_handle_t nvs_handle, int index, const c
 
     // 使用更简单的格式保存，减少JSON开销
     char msg_buf[MAX_UUID_LENGTH + MAX_USERNAME_LENGTH + MAX_MESSAGE_LENGTH + 32];
-    snprintf(msg_buf, sizeof(msg_buf), "%s|%s|%s|%u",
+    snprintf(msg_buf, sizeof(msg_buf), "%s|%s|%s|%lu",
              message->uuid, message->username, message->message, message->timestamp);
 
     esp_err_t err = nvs_set_str(nvs_handle, key, msg_buf);
@@ -288,102 +288,111 @@ char* chat_storage_get_messages_json(void) {
  * @return char* JSON字符串指针，调用者负责释放内存
  */
 char* chat_storage_get_messages_since_json(uint32_t since_timestamp, bool *has_new_messages) {
-    // 创建JSON响应对象
+    // 初始化输出变量
+    if (has_new_messages) {
+        *has_new_messages = false;
+    }
+
+    if (chat_mutex == NULL) {
+        ESP_LOGE(STORAGE_TAG, "Chat mutex is NULL");
+        return NULL;
+    }
+
+    // 创建响应对象
     cJSON *response = cJSON_CreateObject();
     if (!response) {
-        ESP_LOGE(STORAGE_TAG, "Failed to create JSON response object");
-        *has_new_messages = false;
+        ESP_LOGE(STORAGE_TAG, "Failed to create JSON response");
         return NULL;
     }
 
-    cJSON *messages_array = cJSON_CreateArray();
-    if (!messages_array) {
-        ESP_LOGE(STORAGE_TAG, "Failed to create JSON messages array");
-        cJSON_Delete(response);
-        *has_new_messages = false;
-        return NULL;
-    }
-
-    cJSON_AddItemToObject(response, "messages", messages_array);
-
-    // 获取当前时间作为响应时间戳
+    // 添加当前服务器时间
     uint32_t current_time = chat_storage_get_current_time();
     cJSON_AddNumberToObject(response, "server_time", current_time);
 
-    int found_new_messages = 0;
-    int count = 0;
-    int start_idx = 0;
-
-    // 使用栈内存优化小数据集
-    chat_message_t stack_messages[16]; // 栈上的临时缓冲区
-    chat_message_t *temp_messages = NULL;
-    bool using_heap = false;
-
-    if (xSemaphoreTake(chat_mutex, portMAX_DELAY) == pdTRUE) {
-        count = chat_storage.count;
-
-        if (count > 0) {
-            if (count > 16) {
-                // 只有当消息超过栈缓冲区大小时才使用堆内存
-                temp_messages = malloc(count * sizeof(chat_message_t));
-                using_heap = true;
-                if (!temp_messages) {
-                    xSemaphoreGive(chat_mutex);
-                    cJSON_Delete(response);
-                    *has_new_messages = false;
-                    return NULL;
-                }
-            } else {
-                // 对于少量消息使用栈内存
-                temp_messages = stack_messages;
-            }
-
-            if (count == MAX_MESSAGES) {
-                start_idx = chat_storage.next_index;
-            }
-
-            // 拷贝消息到临时数组以减少锁定时间
-            for (int i = 0; i < count; i++) {
-                int idx = (start_idx + i) % MAX_MESSAGES;
-                memcpy(&temp_messages[i], &chat_storage.messages[idx], sizeof(chat_message_t));
-            }
-        }
-        xSemaphoreGive(chat_mutex);
-    } else {
+    // 创建消息数组
+    cJSON *messages_array = cJSON_CreateArray();
+    if (!messages_array) {
+        ESP_LOGE(STORAGE_TAG, "Failed to create messages array");
         cJSON_Delete(response);
-        *has_new_messages = false;
         return NULL;
     }
+    cJSON_AddItemToObject(response, "messages", messages_array);
 
-    // 遍历所有消息，寻找比since_timestamp更新的消息（不持锁）
-    for (int i = 0; i < count; i++) {
-        // 如果消息时间戳大于客户端提供的时间戳，则添加到响应中
-        if (temp_messages[i].timestamp > since_timestamp) {
-            cJSON *message = cJSON_CreateObject();
-            if (!message) {
-                ESP_LOGE(STORAGE_TAG, "Failed to create JSON message object");
-                continue; // 跳过这条消息但继续处理其他消息
+    // 创建临时存储
+    int count = 0;
+    int start_idx = 0;
+    int found_new_messages = 0;
+    chat_message_t *messages_copy = NULL;
+
+    // 获取互斥锁，复制所有需要的数据
+    BaseType_t mutex_result = xSemaphoreTake(chat_mutex, pdMS_TO_TICKS(1000)); // 添加超时
+    if (mutex_result != pdTRUE) {
+        ESP_LOGE(STORAGE_TAG, "Failed to take mutex within timeout");
+        cJSON_AddBoolToObject(response, "has_new_messages", false);
+        cJSON_AddStringToObject(response, "error", "Server busy, try again later");
+        char *json_str = cJSON_PrintUnformatted(response);
+        cJSON_Delete(response);
+        return json_str;
+    }
+
+    // 复制必要的数据，最小化持锁时间
+    count = chat_storage.count;
+    if (count == MAX_MESSAGES) {
+        start_idx = chat_storage.next_index;
+    }
+
+    // 只有在有消息时才分配内存
+    if (count > 0) {
+        messages_copy = malloc(count * sizeof(chat_message_t));
+        if (messages_copy) {
+            // 复制所有消息
+            for (int i = 0; i < count; i++) {
+                int idx = (start_idx + i) % MAX_MESSAGES;
+                memcpy(&messages_copy[i], &chat_storage.messages[idx], sizeof(chat_message_t));
             }
-
-            cJSON_AddStringToObject(message, "uuid", temp_messages[i].uuid);
-            cJSON_AddStringToObject(message, "username", temp_messages[i].username);
-            cJSON_AddStringToObject(message, "message", temp_messages[i].message);
-            cJSON_AddNumberToObject(message, "timestamp", temp_messages[i].timestamp);
-            cJSON_AddItemToArray(messages_array, message);
-            found_new_messages++;
+        } else {
+            ESP_LOGE(STORAGE_TAG, "Failed to allocate memory for messages copy");
+            // 内存分配失败，立即释放互斥锁
+            xSemaphoreGive(chat_mutex);
+            cJSON_AddBoolToObject(response, "has_new_messages", false);
+            cJSON_AddStringToObject(response, "error", "Server out of memory");
+            char *json_str = cJSON_PrintUnformatted(response);
+            cJSON_Delete(response);
+            return json_str;
         }
     }
 
-    // 如果使用了堆内存，释放它
-    if (using_heap && temp_messages) {
-        free(temp_messages);
+    // 尽快释放互斥锁
+    xSemaphoreGive(chat_mutex);
+
+    // 现在处理复制的数据，不再持有互斥锁
+    if (count > 0 && messages_copy != NULL) {
+        for (int i = 0; i < count; i++) {
+            // 检查消息是否新于给定时间戳
+            if (messages_copy[i].timestamp > since_timestamp) {
+                cJSON *message = cJSON_CreateObject();
+                if (message) {
+                    cJSON_AddStringToObject(message, "uuid", messages_copy[i].uuid);
+                    cJSON_AddStringToObject(message, "username", messages_copy[i].username);
+                    cJSON_AddStringToObject(message, "message", messages_copy[i].message);
+                    cJSON_AddNumberToObject(message, "timestamp", messages_copy[i].timestamp);
+                    cJSON_AddItemToArray(messages_array, message);
+                    found_new_messages++;
+                }
+            }
+        }
+
+        // 释放临时内存
+        free(messages_copy);
     }
 
-    // 添加是否有新消息的标志
-    *has_new_messages = (found_new_messages > 0);
+    // 设置是否有新消息
+    if (has_new_messages) {
+        *has_new_messages = (found_new_messages > 0);
+    }
     cJSON_AddBoolToObject(response, "has_new_messages", found_new_messages > 0);
 
-    // 生成JSON字符串并释放对象
+    // 生成JSON字符串并清理
     char *json_str = cJSON_PrintUnformatted(response);
     cJSON_Delete(response);
 

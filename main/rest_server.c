@@ -19,6 +19,16 @@
 
 static const char *REST_TAG = "esp-rest"; // 定义日志标签，用于ESP日志系统
 static httpd_handle_t server_instance = NULL; // 存储服务器实例句柄
+
+#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128) // 定义文件路径最大长度，ESP_VFS_PATH_MAX是ESP-IDF定义的文件系统路径最大长度
+#define SCRATCH_BUFSIZE (10240)                // 定义临时缓冲区大小，用于读写文件和处理HTTP请求
+
+// REST服务器上下文结构体，存储服务器运行时需要的状态和数据
+typedef struct rest_server_context {
+    char base_path[ESP_VFS_PATH_MAX + 1]; // Web服务器根目录路径，存储静态文件的位置
+    char scratch[SCRATCH_BUFSIZE];        // 临时缓冲区，用于读写文件和请求体
+} rest_server_context_t;
+
 static rest_server_context_t *rest_context = NULL; // 存储REST上下文
 
 // 检查宏，用于检查条件a，如果为假，则打印错误日志并跳转到goto_tag
@@ -32,15 +42,6 @@ static rest_server_context_t *rest_context = NULL; // 存储REST上下文
             goto goto_tag;                                                             \
         }                                                                              \
     } while (0)
-
-#define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128) // 定义文件路径最大长度，ESP_VFS_PATH_MAX是ESP-IDF定义的文件系统路径最大长度
-#define SCRATCH_BUFSIZE (10240)                // 定义临时缓冲区大小，用于读写文件和处理HTTP请求
-
-// REST服务器上下文结构体，存储服务器运行时需要的状态和数据
-typedef struct rest_server_context {
-    char base_path[ESP_VFS_PATH_MAX + 1]; // Web服务器根目录路径，存储静态文件的位置
-    char scratch[SCRATCH_BUFSIZE];        // 临时缓冲区，用于读写文件和请求体
-} rest_server_context_t;
 
 // 检查文件扩展名的宏，忽略大小写，用于根据文件类型设置正确的Content-Type
 #define CHECK_FILE_EXTENSION(filename, ext) (strcasecmp(&filename[strlen(filename) - strlen(ext)], ext) == 0)
