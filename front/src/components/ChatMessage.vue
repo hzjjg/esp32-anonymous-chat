@@ -50,8 +50,7 @@ const props = defineProps<{
 const userStore = useUserStore()
 
 const isCurrentUser = computed(() => {
-  return Math.random() > 0.5
-  // return userStore.user?.uuid === props.message.uuid
+  return userStore.user?.uuid === props.message.uuid
 })
 
 const formatTime = (timestamp: number) => {

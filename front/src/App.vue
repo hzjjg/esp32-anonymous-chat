@@ -20,10 +20,10 @@
           <h1 class="text-xl font-bold">Anonymous Chat Room</h1>
         </div>
         <div class="flex items-center space-x-4">
-          <div class="flex items-center px-3 py-1.5 bg-white bg-opacity-20 rounded-full text-sm">
-            <span class="inline-block w-2.5 h-2.5 rounded-full mr-2"
+          <div class="flex items-center py-1.5 bg-white bg-opacity-20 rounded-full text-sm px-1.5 md:px-3">
+            <span class="inline-block w-2.5 h-2.5 rounded-full md:mr-2"
               :class="chatStore.isConnected ? 'bg-green-400' : 'bg-red-400'"></span>
-            {{ chatStore.isConnected ? '已连接' : '未连接' }}
+            <span class="hidden md:inline">{{ chatStore.isConnected ? '已连接' : '未连接' }}</span>
           </div>
           <UserSettings />
         </div>
