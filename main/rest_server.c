@@ -135,69 +135,6 @@ static esp_err_t rest_common_get_handler(httpd_req_t *req)
 }
 
 /**
- * @brief 处理灯光亮度控制的POST请求（示例）
- *
- * 接收包含RGB值的JSON数据，并打印日志。实际应用中可以控制LED灯的亮度和颜色。
- *
- * @param req HTTP请求对象指针
- * @return esp_err_t ESP_OK表示成功，ESP_FAIL表示失败
- *
- * 这是一个示例函数，演示如何接收和处理JSON格式的POST请求数据
- */
-static esp_err_t light_brightness_post_handler(httpd_req_t *req)
-{
-    int total_len = req->content_len; // 获取请求体总长度
-    int cur_len = 0;
-    char *buf = ((rest_server_context_t *)(req->user_ctx))->scratch; // 使用临时缓冲区存储请求数据
-    int received = 0;
-    // 检查请求体是否过大，防止缓冲区溢出
-    if (total_len >= SCRATCH_BUFSIZE) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "content too long");
-        return ESP_FAIL;
-    }
-    // 循环接收请求体数据，处理分块传输的情况
-    while (cur_len < total_len) {
-        received = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
-        if (received <= 0) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post control value");
-            return ESP_FAIL;
-        }
-        cur_len += received;
-    }
-    buf[total_len] = '\0'; // 添加字符串结束符，方便后续处理
-
-    // 解析JSON数据，使用cJSON库
-    cJSON *root = cJSON_Parse(buf);
-    if (!root) {
-        ESP_LOGE(REST_TAG, "Failed to parse JSON: %s", buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON format");
-        return ESP_FAIL;
-    }
-    // 获取RGB值
-    cJSON *red_obj = cJSON_GetObjectItem(root, "red");
-    cJSON *green_obj = cJSON_GetObjectItem(root, "green");
-    cJSON *blue_obj = cJSON_GetObjectItem(root, "blue");
-
-    // 验证JSON结构和数据类型
-    if (!red_obj || !green_obj || !blue_obj || !cJSON_IsNumber(red_obj) || !cJSON_IsNumber(green_obj) || !cJSON_IsNumber(blue_obj)) {
-        ESP_LOGE(REST_TAG, "Invalid JSON structure: %s", buf);
-        cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid RGB values");
-        return ESP_FAIL;
-    }
-
-    // 提取RGB值，在实际应用中可用于控制LED灯
-    int red = red_obj->valueint;
-    int green = green_obj->valueint;
-    int blue = blue_obj->valueint;
-    ESP_LOGI(REST_TAG, "Light control: red = %d, green = %d, blue = %d", red, green, blue);
-    cJSON_Delete(root);
-    // 发送成功响应
-    httpd_resp_sendstr(req, "Post control value successfully");
-    return ESP_OK;
-}
-
-/**
  * @brief 处理获取系统信息的GET请求
  *
  * 返回包含ESP-IDF版本和芯片核心数的JSON响应，可用于前端显示系统信息。
@@ -294,15 +231,6 @@ esp_err_t start_rest_server(const char *base_path)
         .user_ctx = rest_context
     };
     httpd_register_uri_handler(server, &temperature_data_get_uri);
-
-    /* 注册灯光控制API路由 */
-    httpd_uri_t light_brightness_post_uri = {
-        .uri = "/api/v1/light/brightness",
-        .method = HTTP_POST,
-        .handler = light_brightness_post_handler,
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &light_brightness_post_uri);
 
     // 注册聊天服务器相关的URI处理函数 (SSE事件流, POST消息, GET UUID)
     register_chat_uri_handlers(server);

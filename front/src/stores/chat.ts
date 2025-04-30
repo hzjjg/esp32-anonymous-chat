@@ -6,63 +6,64 @@ import { useUserStore } from './user'
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const isConnected = ref(false)
-  const eventSource = ref<EventSource | null>(null)
+  const pollingInterval = ref<number | null>(null)
+  const lastTimestamp = ref<number>(0)
+  const pollingDelay = 3000 // 轮询间隔，默认3秒
 
-  const initializeSSE = () => {
-    if (eventSource.value) {
-      eventSource.value.close()
+  // 初始化轮询
+  const initializePolling = async () => {
+    // 如果已经在轮询，先停止
+    if (pollingInterval.value) {
+      stopPolling()
     }
 
-    const sse = new EventSource('/api/chat/events')
-    eventSource.value = sse
+    // 先获取初始消息列表
+    await fetchMessages()
 
-    sse.addEventListener('open', () => {
-      isConnected.value = true
-      console.log('SSE连接已建立')
-    })
+    // 开始轮询
+    isConnected.value = true
+    pollingInterval.value = window.setInterval(fetchMessages, pollingDelay)
+    console.log('轮询已启动')
 
-    sse.addEventListener('error', (e) => {
-      console.error('SSE连接错误:', e)
-      isConnected.value = false
-
-      // 尝试重新连接
-      setTimeout(() => {
-        if (sse.readyState === EventSource.CLOSED) {
-          initializeSSE()
-        }
-      }, 3000)
-    })
-
-    sse.addEventListener('message', (e) => {
-      try {
-        const message: ChatMessage = JSON.parse(e.data)
-        addMessage(message)
-      } catch (error) {
-        console.error('解析消息失败:', error)
-      }
-    })
-
-    sse.addEventListener('messages', (e) => {
-      try {
-        const newMessages: ChatMessage[] = JSON.parse(e.data)
-        messages.value = newMessages
-      } catch (error) {
-        console.error('解析消息列表失败:', error)
-      }
-    })
-
-    sse.addEventListener('ping', () => {
-      // 保持连接活跃的ping
-    })
-
-    return sse
+    return true
   }
 
-  const closeSSE = () => {
-    if (eventSource.value) {
-      eventSource.value.close()
-      eventSource.value = null
+  // 获取消息
+  const fetchMessages = async () => {
+    try {
+      const response = await fetch(`/api/chat/messages?since_timestamp=${lastTimestamp.value}`)
+
+      if (!response.ok) {
+        console.error('获取消息失败:', response.status)
+        return
+      }
+
+      const data = await response.json()
+
+      // 更新服务器时间
+      if (data.server_time) {
+        lastTimestamp.value = data.server_time
+      }
+
+      // 处理新消息
+      if (data.has_new_messages && data.messages && data.messages.length > 0) {
+        // 添加新消息到列表
+        for (const message of data.messages) {
+          addMessage(message)
+        }
+      }
+    } catch (error) {
+      console.error('轮询消息失败:', error)
+    }
+  }
+
+  // 停止轮询
+  const stopPolling = () => {
+    if (pollingInterval.value) {
+      clearInterval(pollingInterval.value)
+      pollingInterval.value = null
       isConnected.value = false
+      console.log('轮询已停止')
     }
   }
 
@@ -92,7 +93,12 @@ export const useChatStore = defineStore('chat', () => {
         })
       })
 
-      return response.ok
+      if (response.ok) {
+        // 发送成功后立即获取新消息，不等待下一次轮询
+        await fetchMessages()
+        return true
+      }
+      return false
     } catch (error) {
       console.error('发送消息失败:', error)
       return false
@@ -102,8 +108,8 @@ export const useChatStore = defineStore('chat', () => {
   return {
     messages,
     isConnected,
-    initializeSSE,
-    closeSSE,
+    initializePolling,
+    stopPolling,
     sendMessage
   }
 })
