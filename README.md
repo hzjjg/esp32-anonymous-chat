@@ -36,10 +36,7 @@
 
 ## 网络发现
 
-为方便本地网络中发现设备，本项目实现了：
-
-1. **mDNS服务** - 可通过 `http://esp-home.local` 访问（默认域名可在菜单中配置）
-2. **NetBIOS支持** - Windows环境下可通过 `http://esp-home` 访问
+**mDNS服务** - 可通过 `http://chat.local` 访问（默认域名可在菜单中配置）
 
 ## 部署模式
 
